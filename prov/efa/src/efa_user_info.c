@@ -281,6 +281,8 @@ static
 int efa_user_info_alter_rxr(struct fi_info *info, const struct fi_info *hints)
 {
 	uint64_t atomic_ordering;
+	int hmem_cuda_use_gdrcopy, hmem_cuda_enable_xfer;
+	bool support_atomic;
 
 	/*
 	 * Do not advertise FI_HMEM capabilities when the core can not support
@@ -354,6 +356,36 @@ int efa_user_info_alter_rxr(struct fi_info *info, const struct fi_info *hints)
 
 			info->domain_attr->mr_mode |= FI_MR_HMEM;
 
+			support_atomic = false;
+			if (hmem_ops[FI_HMEM_CUDA].initialized == true) {
+				/*
+				  We are making an assumption here that the remote we are performing atomic
+				  operations on is the same as us. This might not be true for atomics over
+				  client/server model using EFA.  We do not currently have any users trying
+				  to do this, so we are not worried about this assumption yet.
+				*/
+				fi_param_get_bool(NULL, "hmem_cuda_use_gdrcopy", &hmem_cuda_use_gdrcopy);
+				fi_param_get_bool(NULL, "hmem_cuda_enable_xfer", &hmem_cuda_enable_xfer);
+				support_atomic = hmem_cuda_enable_xfer && !hmem_cuda_use_gdrcopy;
+			}
+
+			if (!(hints->caps & FI_ATOMIC)) {
+				/*
+				   If the user doesn't explicity request FI_HMEM + FI_ATOMIC,
+				   don't claim support
+				*/
+				info->caps &= ~FI_ATOMIC;
+			} else if(!support_atomic) {
+				/*
+				 If the user explicity request FI_HMEM + FI_ATOMIC, but we do not support
+				 it for this type of hmem, do not claim atomic support
+				*/
+				EFA_WARN(FI_LOG_CORE,
+					"FI_HMEM + FI_ATOMIC support requested but not supported for HMEM type.\n");
+				return -FI_ENODATA;
+			} else {
+				info->caps &= FI_ATOMIC;
+			}
 		} else {
 			/*
 			 * FI_HMEM is a primary capability. Providers should
