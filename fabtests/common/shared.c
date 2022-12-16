@@ -2659,7 +2659,7 @@ int ft_sync()
 
 	if (opts.dst_addr) {
 		if (!(opts.options & FT_OPT_OOB_SYNC)) {
-			ret = ft_tx(ep, remote_fi_addr, 1, &tx_ctx);
+			ret = ft_tx(ep, remote_fi_addr, 0, &tx_ctx);
 			if (ret)
 				return ret;
 
@@ -2675,11 +2675,11 @@ int ft_sync()
 		}
 	} else {
 		if (!(opts.options & FT_OPT_OOB_SYNC)) {
-			ret = ft_rx(ep, 1);
+			ret = ft_rx(ep, 0);
 			if (ret)
 				return ret;
 
-			ret = ft_tx(ep, remote_fi_addr, 1, &tx_ctx);
+			ret = ft_tx(ep, remote_fi_addr, 0, &tx_ctx);
 		} else {
 			ret = ft_sock_recv(oob_sock, &buf, 1);
 			if (ret)
@@ -3760,6 +3760,11 @@ void ft_longopts_usage()
 		"spin until a debugger can be attached.");
 }
 
+void ft_verify_data_usage()
+{
+	FT_PRINT_OPTS_USAGE("-v", "enables data_integrity checks (implies -U)");
+}
+
 int debug_assert;
 
 int lopt_idx = 0;
@@ -3783,4 +3788,31 @@ int ft_parse_long_opts(int op, char *optarg)
 	default:
 		return EXIT_FAILURE;
 	}
+}
+
+int ft_sync_for_validation()
+{
+	char buf;
+	int ret;
+	void *mr_desc = NULL;
+
+	FT_POST(fi_send, ft_progress, txcq, tx_seq,
+			&tx_cq_cntr, "transmit (ft_sync_no_buffer)", ep, &buf, 1,
+			mr_desc, remote_fi_addr, NULL);
+
+	ret = ft_get_tx_comp(tx_seq);
+	if (ret) {
+		FT_ERR("failed to get tx completion during ft_sync_no_buffer!\n");
+		return ret;
+	}
+	ret = ft_get_rx_comp(rx_seq);
+	if (ret) {
+		FT_ERR("failed to get rx completion during ft_sync_no_buffer!\n");
+		return ret;
+	}
+
+	FT_POST(fi_recv, ft_progress, rxcq, rx_seq,
+			&rx_cq_cntr, "receive (ft_sync_no_buffer)", ep, &buf, 1,
+			mr_desc, remote_fi_addr, NULL);
+	return ret;
 }
