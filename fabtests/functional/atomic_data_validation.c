@@ -33,16 +33,21 @@ int atomic_data_validation_print_summary() {
 	char type_str[32] = {0};
 	char op_str[32] = {0};
 	char test_name[64] = {};
+	int validation_combos = 0;
 
 	struct atomic_dv_summary *node = dv_summary_root;
 	struct atomic_dv_summary *next = NULL;
 
-	if (!node) return 0;
+	if (!node) {
+		printf("SKIPPED: No validation performed.\n");
+		return 0;
+	}
 
 	while(node) {
 		snprintf(type_str, sizeof(type_str)-1, "%s", fi_tostr(&node->datatype, FI_TYPE_ATOMIC_TYPE));
 		snprintf(op_str, sizeof(op_str)-1, "%s", fi_tostr(&node->op, FI_TYPE_ATOMIC_OP));
 		snprintf(test_name, sizeof(test_name), "%s on %s", op_str, type_str);
+		validation_combos += 1;
 		if (node->validation_failures==0 && node->validations_performed==node->trials) {
 			// all these tests passed
 			//printf("PASSED: %s passed %zu trials.\n",test_name, node->trials);
@@ -63,6 +68,12 @@ int atomic_data_validation_print_summary() {
 		next = node->next;
 		free(node);
 		node = next;
+	}
+
+	if (retval == 0) {
+		printf("PASSED: All %d combinations of ops and datatypes tested passed.\n",validation_combos);
+	} else {
+		printf("FAILED: Some of the %d combinations of ops and datatypes tested failed.\n",validation_combos);
 	}
 
 	return retval;
