@@ -512,3 +512,36 @@ error:
 
 
 }
+
+int sync_for_validation()
+{
+	char buf;
+	int ret;
+	void *mr_desc = NULL;
+	struct fi_cq_err_entry comp;
+
+
+	// FT_POST(fi_send, ft_progress, txcq, tx_seq,
+	// 		&tx_cq_cntr, "transmit (ft_sync_no_buffer)", ep, &buf, 1,
+	// 		mr_desc, remote_fi_addr, NULL);
+	tx_seq += 1;
+	fi_send( ep, &buf, 1, mr_desc, remote_fi_addr, NULL);
+
+	ret = ft_get_tx_comp(tx_seq);
+	if (ret) {
+		FT_ERR("failed to get tx completion during ft_sync_no_buffer!\n");
+		return ret;
+	}
+	ret = ft_get_rx_comp(rx_seq);
+	if (ret) {
+		FT_ERR("failed to get rx completion during ft_sync_no_buffer!\n");
+		return ret;
+	}
+	rx_seq += 1;
+	// FT_POST(fi_recv, ft_progress, rxcq, rx_seq,
+	// 		&rx_cq_cntr, "receive (ft_sync_no_buffer)", ep, &buf, 1,
+	// 		mr_desc, remote_fi_addr, NULL);
+	fi_recv( ep, &buf, 1, mr_desc, remote_fi_addr, NULL);
+
+	return ret;
+}

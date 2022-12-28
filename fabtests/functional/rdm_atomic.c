@@ -237,7 +237,7 @@ static inline int execute_base_atomic_op(enum fi_op op, enum fi_datatype datatyp
 		ret  = atomic_data_validation_setup(datatype, jrank_self, tx_buf, opts.transfer_size);
 		ret |= atomic_data_validation_setup(datatype, jrank_self, rx_buf, opts.transfer_size);
 		if (ret) return ret;
-		ret = ft_sync_for_validation();
+		ret = sync_for_validation();
 		if (ret) return ret;
 	}
 	
@@ -256,7 +256,7 @@ static inline int execute_base_atomic_op(enum fi_op op, enum fi_datatype datatyp
 	}
 
 	if (ft_check_opts(FT_OPT_VERIFY_DATA)) {
-		ret = ft_sync_for_validation();
+		ret = sync_for_validation();
 		if (ret) return ret;
 		ret = atomic_data_validation_check(datatype, op, jrank_self, rx_buf, result, opts.transfer_size, 1, 0);
 		if (ret) return ret;
@@ -274,7 +274,7 @@ static inline int execute_fetch_atomic_op(enum fi_op op, enum fi_datatype dataty
 		ret  = atomic_data_validation_setup(datatype, jrank_self, tx_buf, opts.transfer_size);
 		ret |= atomic_data_validation_setup(datatype, jrank_self, rx_buf, opts.transfer_size);
 		if (ret) return ret;
-		ret = ft_sync_for_validation();
+		ret = sync_for_validation();
 		if (ret) return ret;
 	}
 
@@ -287,7 +287,7 @@ static inline int execute_fetch_atomic_op(enum fi_op op, enum fi_datatype dataty
 	ret = ft_get_tx_comp(tx_seq);
 
 	if (ft_check_opts(FT_OPT_VERIFY_DATA)) {
-		ret = ft_sync_for_validation();
+		ret = sync_for_validation();
 		if (ret) return ret;
 		ret = atomic_data_validation_check(datatype, op, jrank_self, rx_buf, result, opts.transfer_size, 0, 1);
 		if (ret) return ret;
@@ -306,7 +306,7 @@ static inline int execute_compare_atomic_op(enum fi_op op, enum fi_datatype data
 		ret |= atomic_data_validation_setup(datatype, jrank_self, rx_buf, opts.transfer_size);
 		ret |= atomic_data_validation_setup(datatype, jrank_self, compare, opts.transfer_size);
 		if (ret) return ret;
-		ret = ft_sync_for_validation();
+		ret = sync_for_validation();
 		if (ret) return ret;
 	}
 
@@ -319,7 +319,7 @@ static inline int execute_compare_atomic_op(enum fi_op op, enum fi_datatype data
 	ret = ft_get_tx_comp(tx_seq);
 
 	if (ft_check_opts(FT_OPT_VERIFY_DATA)) {
-		ret = ft_sync_for_validation();
+		ret = sync_for_validation();
 		if (ret) return ret;
 		ret = atomic_data_validation_check(datatype, op, jrank_self, rx_buf, result, opts.transfer_size, 1, 1);
 		if (ret) return ret;
