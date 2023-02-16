@@ -883,6 +883,25 @@ void rxr_pkt_handle_send_completion(struct rxr_ep *ep, struct rxr_pkt_entry *pkt
 	rxr_pkt_entry_release_tx(ep, pkt_entry);
 }
 
+void rxr_pkt_handle_write_completion(struct rxr_ep *ep, struct rxr_pkt_entry *pkt_entry)
+{
+	switch (rxr_get_base_hdr(pkt_entry->wiredata)->type) {
+	case RXR_RMA_CONTEXT_PKT:
+		rxr_pkt_handle_rma_completion(ep, pkt_entry);
+		return;
+	default:
+		EFA_WARN(FI_LOG_CQ,
+			"invalid pkt type %d in rxr_pkt_handle_write_completion\n",
+			rxr_get_base_hdr(pkt_entry->wiredata)->type);
+		assert(0 && "invalid control pkt type");
+		efa_eq_write_error(&ep->base_ep.util_ep, FI_EIO, FI_EFA_ERR_INVALID_PKT_TYPE);
+		return;
+	}
+
+	rxr_ep_record_tx_op_completed(ep, pkt_entry);
+	rxr_pkt_entry_release_tx(ep, pkt_entry);
+}
+
 /**
  * @brief handle the a packet that encountered error completion while receiving
  *
