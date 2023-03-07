@@ -30,8 +30,6 @@
  * SOFTWARE.
  */
 
-#include "sm2_common.h"
-
 #if HAVE_CONFIG_H
 #  include <config.h>
 #endif /* HAVE_CONFIG_H */
@@ -67,6 +65,8 @@
 #include <ofi_mr.h>
 #include <ofi_lock.h>
 
+#include "sm2_common.h"
+
 #ifndef _SM2_H_
 #define _SM2_H_
 
@@ -87,9 +87,20 @@ int sm2_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 
 struct sm2_av {
 	struct util_av		util_av;
+	struct sm2_mmap		sm2_mmap;
+	struct sm2_private_aux  *sm2_aux;
+
+	struct sm2_map		*sm2_map; // get rid of this
+	size_t			used;	  // get rid of this
+};
+
+/*
+struct sm2_av {
+	struct util_av		util_av;
 	struct sm2_map		*sm2_map;
 	size_t			used;
 };
+*/
 
 static inline int64_t sm2_addr_lookup(struct util_av *av, fi_addr_t fiaddr)
 {
@@ -219,7 +230,7 @@ struct sm2_domain {
 	struct fid_peer_srx	*srx;
 };
 
-#define SM2_PREFIX	"fi_shm://"
+#define SM2_PREFIX	"fi_sm2://"
 #define SM2_PREFIX_NS	"fi_ns://"
 
 #define SM2_ZE_SOCK_PATH	"/dev/shm/ze_"
@@ -280,7 +291,8 @@ struct sm2_ep {
 	size_t			rx_size;
 	const char		*name;
 	uint64_t		msg_id;
-	struct sm2_region	*volatile region;
+	//struct sm2_region	*volatile region;
+	struct sm2_mmap		*mmap_regions;
 	//if double locking is needed, shm region lock must
 	//be acquired before any shm EP locks
 	ofi_spin_t		tx_lock;
@@ -398,4 +410,31 @@ static inline bool sm2_ze_ipc_enabled(struct sm2_region *smr,
 }
 
 int sm2_unexp_start(struct fi_peer_rx_entry *rx_entry);
+
+
+
+static inline struct sm2_region *sm2_peer_region(struct sm2_ep *ep, int id)
+{
+	struct sm2_av *sm2_av;
+
+	assert(id < SM2_MAX_PEERS);
+	sm2_av = container_of(ep->util_ep.av, struct sm2_av, util_av);
+
+	return (struct sm2_region *)sm2_mmap_ep_region(&sm2_av->sm2_mmap, id);
+
+}
+
+static inline char *sm2_peer_fi_addr(struct sm2_ep *ep, int id)
+{
+	struct sm2_av *sm2_av;
+	struct sm2_ep_allocation_entry *entries;
+
+	assert(id < SM2_MAX_PEERS);
+	sm2_av = container_of(ep->util_ep.av, struct sm2_av, util_av);
+
+	entries = sm2_mmap_entries(&sm2_av->sm2_mmap);
+	return entries[id].ep_name;
+}
+
+
 #endif

@@ -1,0 +1,401 @@
+#include <stdlib.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <stdio.h>
+#include <unistd.h>
+
+#include "sm2.h"
+
+
+#define NEXT_MULTIPLE_OF(x, mod) x%mod ? ((x/mod)+1)*mod : x
+
+/**
+ * @brief take an open file, and mmap its contents
+ * 
+ * @param[in] fd
+ * @param[out] map
+*/
+void* sm2_mmap_map(int fd, struct sm2_mmap *map )
+{
+	struct stat st;
+	int err;
+
+	err = fstat(fd, &st);
+	if (err) goto out;
+	map->base = mmap(0, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	map->fd = fd;
+	map->size = st.st_size;
+out:
+	if (err) {
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+			"Failed syscall during sm2_mmap_remap()\n");
+	}
+	return map->base;
+}
+
+/**
+ * @brief take sm2_mmap, and re-map if necessary, ensuring size of at_least
+ * 
+ * If the size of the current map or the size of the file are not sufficient
+ * to address "at_least" bytes, then the file will be truncated() (extended)
+ * to the required size and the memory munmap()ed and re mmap()'ed
+ * 
+ * @param[inout] map
+ * @param[in] at_least
+*/
+void* sm2_mmap_remap(struct sm2_mmap *map, size_t at_least )
+{
+	struct stat st;
+	int err;
+
+	err = fstat(map->fd, &st);
+	if (err) goto out;
+
+	if (st.st_size < at_least) {
+		/* we need to grow the file. */
+		err = ftruncate(map->fd, at_least);
+		if (err) goto out;
+	} else if (st.st_size >= map->size) {
+		/* file has been extended by another process since
+		   last we checked.  Re-map the entire file. */
+		at_least = st.st_size;
+	} else {
+		/* file has shrunk since we checked. */
+		// TODO: Currently this never happens.  Once we implement it,
+		// we should find a way to tell other processes to re-map and
+		// remove this warning.
+		FI_WARN(&sm2_prov, FI_LOG_AV,
+			"Unexpected: shm file has shrunk!\n");
+		at_least = st.st_size;
+	}
+	if (map->size != at_least ) {
+		/* now un-map and re-map the file */
+		err = munmap( map->base, map->size);
+		if (err) goto out;
+		map->base = mmap(0, at_least, PROT_READ | PROT_WRITE, MAP_SHARED, map->fd, 0);
+		map->size = at_least;
+	}
+
+out:
+	if (err) {
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+			"Failed syscall during sm2_mmap_remap()\n");
+	}
+	return map->base;
+}
+
+/**
+ * @brief close fd, and unmap memory
+*/
+ssize_t sm2_mmap_unmap_and_close(struct sm2_mmap *map )
+{
+	int err;
+	err = close(map->fd);
+	err = munmap(map->base, map->size);
+	return err;
+}
+
+
+
+/**
+ * @brief open and/or create the coordination file
+ * 
+ * Upon return, we own the write-lock on the coordination file
+ * @param[out] map_shared
+*/
+ssize_t sm2_coordinator_open_and_lock(struct sm2_mmap *map_shared)
+{
+	pthread_mutexattr_t att;
+	struct sm2_mmap map_ours;
+	char template[64];
+	struct sm2_coord_file_header *header, *tmp_header;
+	struct sm2_ep_allocation_entry *entries;
+	int fd, common_fd, err, tries, pid;
+
+	pid = getpid();
+	sprintf(template,"%s/fi_sm2_pid%d_XXXXXX",SM2_COORDINATION_DIR,pid);
+
+	char lock_status;
+
+	/* Assume we are the first.
+	   Open a tmpfile file in the shm directory */
+	fd = mkostemp(template, O_RDWR);
+	assert(fd > 0);
+	ftruncate(fd, sizeof(struct sm2_coord_file_header));
+	/* mmap the file */
+	header = sm2_mmap_map(fd, &map_ours);
+
+	pthread_mutexattr_init(&att);
+	//pthread_mutexattr_setrobust(&att, PTHREAD_MUTEX_ROBUST);
+	pthread_mutexattr_setpshared(&att, PTHREAD_PROCESS_SHARED);
+	pthread_mutex_init(&header->write_lock, &att);
+	/* since this is currently our own private mutex,
+	   this lock is uncontested */
+	pthread_mutex_lock(&header->write_lock);
+
+	ofi_atomic_initialize32( &header->pid_lock_hint, pid );
+	header->file_version = 1;
+	header->ep_region_size = 16777216;
+	header->ep_enumerations_max = 4096;
+
+	header->ep_enumerations_offset = sizeof(struct sm2_coord_file_header);
+	header->ep_enumerations_offset = 
+		NEXT_MULTIPLE_OF(header->ep_enumerations_offset, 4096);
+
+	header->ep_regions_offset = 
+		header->ep_enumerations_offset +
+			(header->ep_enumerations_max * sizeof(struct sm2_ep_allocation_entry));
+
+	header->ep_regions_offset = NEXT_MULTIPLE_OF(header->ep_regions_offset, 4096);
+
+	/* allocate enough space in the file for all our allocations, but no
+	   data exchange regions yet. */
+	header = sm2_mmap_remap(&map_ours, header->ep_regions_offset);
+	entries = sm2_mmap_entries(&map_ours);
+	for (int jentry=0; jentry<header->ep_enumerations_max; jentry++) {
+		ofi_atomic_initialize32( &entries[jentry].refcount, 0 );
+	}
+	
+	lock_status = 'F'; /* failed */
+	tries = 1000;
+	do {
+		/* create a hardlink to our file with the common name.
+		   - on success: we hold the lock to a newly
+		   	         created coordination file.
+		   - on failure: the file already exists, we should try opening it.*/
+		err = link(template, SM2_COORDINATION_FILE);
+		if (0 == err) {
+			/* we linked the file we made, we already hold the lock */
+			lock_status = 'O'; /* ours */
+			break;
+		}
+		common_fd = open(SM2_COORDINATION_FILE, O_RDWR);
+		if (common_fd > 0) {
+			int pid_holding = 0;
+			/* we've opened some existing file */
+			tmp_header = sm2_mmap_map(common_fd, map_shared);
+			assert(map_shared->size >= sizeof(struct sm2_coord_file_header));
+			err = pthread_mutex_trylock(&tmp_header->write_lock);
+			if (err == 0) {
+				/* lock acquired! */
+				ofi_atomic_set32( &tmp_header->pid_lock_hint, pid );
+
+				lock_status = 'S'; /* shared */
+				break;
+			}
+			pid_holding = ofi_atomic_get32( &tmp_header->pid_lock_hint );
+
+			/* check if pid_holding is alive by issuing it a
+			   NULL signal (0).  This will not interrupt
+			   the process, but only succeeds if the pid is
+			   still running. */
+			if (pid_holding==0 || !pid_lives(pid_holding)) {
+				/* TODO: unlinking is pretty harsh, but might be the only good option.*/
+				unlink(SM2_COORDINATION_FILE);
+				FI_WARN(&sm2_prov, FI_LOG_AV,
+				"Unlinked file %s because PID=%d held the lock, but it has died\n",
+				SM2_COORDINATION_FILE, pid_holding);
+			}
+			sm2_mmap_unmap_and_close(map_shared);
+		}
+		/* we could not acquire the lock, sleep and try again. */
+		usleep(100);
+	} while (tries-- > 0);
+
+	switch(lock_status) {
+	case 'F':
+	/* failed to acquire. now what? */
+		fprintf(stderr, "Failed to acquire the lock to the coordination file. Aborting\n");
+		abort();
+	case 'S':
+	/* We acquired the lock on the global file.  Unmap the memory
+		that we initialized */
+		sm2_mmap_unmap_and_close(&map_ours);
+		break;
+	case 'O':
+	/* We are using the memory we initialized.  Duplicate it and
+	   leave the map open. */
+		memcpy( map_shared, &map_ours, sizeof(struct sm2_mmap));
+		break;
+	default:
+		/* catch cosmic ray bit-flips */
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+			"Error during sm2_coordinator_open_and_lock, unknown lock state\n");
+		abort();
+	}
+	
+
+	/* now that we have the lock, we can remove our temp file. */
+	unlink(template);
+	return 0;
+}
+
+/**
+ * @brief insert the name into the ep_enumerations array.  Requires the lock.
+ * 
+ * @param[in] name
+ * @param[inout] map
+ * @param[out] av_key
+ * @return 0 on success, some negative FI_ERROR on error
+*/
+ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, int *av_key)
+{
+
+	struct sm2_coord_file_header *header = (void*)map->base;
+	struct sm2_ep_allocation_entry *entries;
+	int jentry;
+	int pid = getpid();
+#ifndef NDEBUG
+	{
+		int pid = getpid();
+		int pid_hint = ofi_atomic_get32( &header->pid_lock_hint );
+		assert( pid_hint == pid );
+	}
+#endif
+
+	entries = sm2_mmap_entries(map);
+	
+	jentry = sm2_coordinator_lookup_entry(name, map);
+	if (jentry >= 0) {
+		FI_WARN( &sm2_prov, FI_LOG_AV,
+			"during sm2 allocation of space for endpoint named %s"
+			" an existing conflicting address was found at AV[%d]\n",
+			name, jentry);
+		
+		if (!pid_lives( entries[jentry].pid )) {
+			FI_WARN( &sm2_prov, FI_LOG_AV,
+			"The pid which allocated the conflicting AV is dead.  "
+			"Reclaiming as our own.\n");
+			// it is possible that EP's referencing this region are
+			// still alive... don't know how to check (they likely
+			// died if PID died)
+			goto found;
+		}
+		else {
+			return -1;
+		}
+	}
+
+	/* good: we could not find the entry, so now look for an empty slot */
+	for (jentry=0; jentry < header->ep_enumerations_max; jentry++) {
+		if (ofi_atomic_cas_bool32(&entries[jentry].refcount, 0, 1)) {
+			goto found;
+		}
+	}
+
+	fprintf(stderr, "No available entries were found in the coordination file, all %d were used\n",header->ep_enumerations_max);
+	return -FI_EAVAIL;
+
+found:
+	entries[jentry].pid = pid;
+
+	FI_WARN(&sm2_prov, FI_LOG_AV,
+		"Allocated sm2 region for %s at AV[%d]\n",
+		name, jentry);
+	strncpy(entries[jentry].ep_name, name, SM2_NAME_MAX);
+	*av_key = jentry;
+	ofi_atomic_initialize32(&entries[jentry].refcount, 1);
+	
+	/* With the entry allocated, we now need to ensure it's mapped. */
+	if (!sm2_mapping_long_enough_check( map, jentry )) {
+		sm2_coordinator_extend_for_entry(map, jentry);
+	}
+	return 0;
+}
+
+/**
+ * @brief look-up the name.
+ * 
+ * @param[in] name
+ * @param[in] map
+ * @return the index of the name, or -1
+*/
+int sm2_coordinator_lookup_entry(const char* name, struct sm2_mmap *map)
+{
+
+	struct sm2_coord_file_header *header = (void*) map->base;
+	struct sm2_ep_allocation_entry *entries;
+	int jentry;
+
+	entries = sm2_mmap_entries(map);
+	
+	for (jentry=0; jentry < header->ep_enumerations_max; jentry++) {
+		if (0 == strncmp(name, entries[jentry].ep_name, SM2_NAME_MAX)) {
+			FI_WARN(&sm2_prov, FI_LOG_AV,
+				"Found existing %s in slot %d\n",name,jentry);
+			return jentry;
+		}
+		if (entries[jentry].ep_name[0] != '\0')
+		{
+			printf("Searching for %s.  AV[%d]=%s\n",name, jentry, entries[jentry].ep_name);
+		}
+	}
+	return -1;
+}
+
+/**
+ * @brief decrement the refcount for the entry.
+ * 
+ * @param[in] name
+ * @param[inout] map
+ * @param[out] av_key
+*/
+ssize_t sm2_coordinator_free_entry(struct sm2_mmap *map, int av_key)
+{
+	struct sm2_ep_allocation_entry *entries;
+	//int pid = getpid();
+	//assert( header->pid_lock_hint == pid );
+
+	entries = sm2_mmap_entries(map);
+	
+	ofi_atomic_dec32(&entries[av_key].refcount);
+	return 0;
+}
+
+
+ssize_t sm2_coordinator_lock(struct sm2_mmap *map) {
+	struct sm2_coord_file_header *header = (void*) map->base;
+	int pid = getpid();
+	
+	pthread_mutex_lock(&header->write_lock);
+	ofi_atomic_set32( &header->pid_lock_hint, pid );
+	return 0;
+}
+
+ssize_t sm2_coordinator_unlock(struct sm2_mmap *map) {
+	struct sm2_coord_file_header *header = (void*) map->base;
+	int pid = getpid();
+	int hint_pid = ofi_atomic_get32( &header->pid_lock_hint );
+	if (pid != hint_pid) {
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "We should (%d) hold the lock, but pid_lock_hint is %d!",pid,hint_pid);
+	}
+	pthread_mutex_unlock(&header->write_lock);
+
+	/* use CAS to clear pid because it's possible another process has
+	   already acquired the lock.  CAS will only clear it if we hold it. */
+	ofi_atomic_cas_bool32( &header->pid_lock_hint, pid, 0);
+	return 0;
+}
+
+/**
+ * @brief ensure the mapping is large enough to address a particular entry
+ * 
+ * No lock is required.  This function may be used to grow the file and mapping
+ * prior to initializing the memory, or it may be used to grow and re-map a
+ * region that another peer already initialized.
+ * 
+ * In either case, we don't need the lock, as we are only growing the file
+ * and not modifying any allocations (ep_entries)
+ * 
+ * @param[in,out] map			an sm2_mmap with fid, size and base address
+ * @param[in] last_valid_entry		The id of a region we need to be valid.
+ * @return pointer to new map->base (typically ignored)
+*/
+void* sm2_coordinator_extend_for_entry(struct sm2_mmap *map, int last_valid_entry) {
+	size_t new_size;
+	new_size = (char*)sm2_mmap_ep_region(map, last_valid_entry+1) - map->base;
+	return sm2_mmap_remap(map, new_size);
+}
+

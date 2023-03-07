@@ -54,30 +54,36 @@ static void sm2_init_env(void)
 	fi_param_get_bool(&sm2_prov, "use_dsa_sar", &sm2_env.use_dsa_sar);
 }
 
+/**
+ * @brief convert strings node + service into a single string addr
+ *
+ * @param[in] node		NULL or a node name
+ * @param[in] service		NULL or service name
+ * @param[out] addr		the string of the address we should use
+*/
 static void sm2_resolve_addr(const char *node, const char *service,
 			     char **addr, size_t *addrlen)
 {
 	char temp_name[SM2_NAME_MAX];
 
+	FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "resolving node=%s, service=%s\n", node?node:"NULL", service?service:"NULL");
 	if (service) {
 		if (node)
-			snprintf(temp_name, SM2_NAME_MAX - 1, "%s%s:%s",
+			*addrlen = snprintf(temp_name, SM2_NAME_MAX - 1, "%s%s:%s",
 				 SM2_PREFIX_NS, node, service);
 		else
-			snprintf(temp_name, SM2_NAME_MAX - 1, "%s%s",
+			*addrlen = snprintf(temp_name, SM2_NAME_MAX - 1, "%s%s",
 				 SM2_PREFIX_NS, service);
 	} else {
 		if (node)
-			snprintf(temp_name, SM2_NAME_MAX - 1, "%s%s",
+			*addrlen = snprintf(temp_name, SM2_NAME_MAX - 1, "%s%s",
 				 SM2_PREFIX, node);
 		else
-			snprintf(temp_name, SM2_NAME_MAX - 1, "%s%d",
+			*addrlen = snprintf(temp_name, SM2_NAME_MAX - 1, "%s%d",
 				 SM2_PREFIX, getpid());
 	}
-
-	*addr = strdup(temp_name);
-	*addrlen = strlen(*addr) + 1;
-	(*addr)[*addrlen - 1]  = '\0';
+	*addr = strndup(temp_name, SM2_NAME_MAX - 1);
+	FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "resolved to %s\n", temp_name);
 }
 
 /*

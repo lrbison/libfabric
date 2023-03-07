@@ -1,6 +1,7 @@
 if HAVE_SM2
 _sm2_files = \
 	prov/sm2/src/sm2_attr.c	\
+	prov/sm2/src/sm2_coordination.c	\
 	prov/sm2/src/sm2_cq.c		\
 	prov/sm2/src/sm2_domain.c	\
 	prov/sm2/src/sm2_progress.c	\

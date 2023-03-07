@@ -52,7 +52,7 @@ static int sm2_progress_resp_entry(struct sm2_ep *ep, struct sm2_resp *resp,
 	uint8_t *src;
 	ssize_t hmem_copy_ret;
 
-	peer_smr = sm2_peer_region(ep->region, pending->peer_id);
+	peer_smr = sm2_peer_region(ep, pending->peer_id);
 
 	switch (pending->cmd.msg.hdr.op_src) {
 	case sm2_src_inject:
@@ -264,39 +264,11 @@ int sm2_unexp_start(struct fi_peer_rx_entry *rx_entry)
 
 static void sm2_progress_connreq(struct sm2_ep *ep, struct sm2_cmd *cmd)
 {
-	struct sm2_region *peer_smr;
-	struct sm2_inject_buf *tx_buf;
-	size_t inj_offset;
-	int64_t idx = -1;
-	int ret = 0;
+	struct sm2_av *sm2_av;
 
-	inj_offset = (size_t) cmd->msg.hdr.src_data;
-	tx_buf = sm2_get_ptr(ep->region, inj_offset);
+	sm2_av = container_of(ep->util_ep.av, struct sm2_av, util_av);
 
-	ret = sm2_map_add(&sm2_prov, ep->region->map,
-			  (char *) tx_buf->data, &idx);
-	if (ret)
-		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
-			"Error processing mapping request\n");
-
-	peer_smr = sm2_peer_region(ep->region, idx);
-
-	if (peer_smr->pid != (int) cmd->msg.hdr.data) {
-		//TODO track and update/complete in error any transfers
-		//to or from old mapping
-		munmap(peer_smr, peer_smr->total_size);
-		sm2_map_to_region(&sm2_prov, ep->region->map, idx);
-		peer_smr = sm2_peer_region(ep->region, idx);
-	}
-	sm2_peer_data(peer_smr)[cmd->msg.hdr.id].addr.id = idx;
-	sm2_peer_data(ep->region)[idx].addr.id = cmd->msg.hdr.id;
-
-	smr_freestack_push(sm2_inject_pool(ep->region), tx_buf);
-	ofi_cirque_discard(sm2_cmd_queue(ep->region));
-	ep->region->cmd_cnt++;
-	assert(ep->region->map->num_peers > 0);
-	ep->region->max_sar_buf_per_peer = SM2_MAX_PEERS /
-		ep->region->map->num_peers;
+	sm2_coordinator_extend_for_entry(&sm2_av->sm2_mmap, cmd->msg.hdr.id);
 }
 
 static int sm2_alloc_cmd_ctx(struct sm2_ep *ep,
@@ -323,7 +295,7 @@ static int sm2_progress_cmd_msg(struct sm2_ep *ep, struct sm2_cmd *cmd)
 	fi_addr_t addr;
 	int ret;
 
-	addr = ep->region->map->peers[cmd->msg.hdr.id].fiaddr;
+	addr = cmd->msg.hdr.id;
 	if (cmd->msg.hdr.op == ofi_op_tagged) {
 		ret = peer_srx->owner_ops->get_tag(peer_srx, addr,
 				cmd->msg.hdr.tag, &rx_entry);
@@ -412,7 +384,7 @@ static int sm2_progress_cmd_rma(struct sm2_ep *ep, struct sm2_cmd *cmd)
 		err = sm2_progress_inject(cmd, iface, device, iov, iov_count,
 					  &total_len, ep, ret);
 		if (cmd->msg.hdr.op == ofi_op_read_req && cmd->msg.hdr.data) {
-			peer_smr = sm2_peer_region(ep->region, cmd->msg.hdr.id);
+			peer_smr = sm2_peer_region(ep, cmd->msg.hdr.id);
 			resp = sm2_get_ptr(peer_smr, cmd->msg.hdr.data);
 			resp->status = -err;
 			sm2_signal(peer_smr);

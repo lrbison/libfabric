@@ -198,61 +198,27 @@ static struct fi_ops_ep sm2_ep_ops = {
 	.tx_size_left = fi_no_tx_size_left,
 };
 
-static void sm2_send_name(struct sm2_ep *ep, int64_t id)
-{
-	struct sm2_region *peer_smr;
-	struct sm2_cmd *cmd;
-	struct sm2_inject_buf *tx_buf;
-
-	peer_smr = sm2_peer_region(ep->region, id);
-
-	pthread_spin_lock(&peer_smr->lock);
-
-	if (sm2_peer_data(ep->region)[id].name_sent || !peer_smr->cmd_cnt)
-		goto out;
-
-	cmd = ofi_cirque_next(sm2_cmd_queue(peer_smr));
-
-	cmd->msg.hdr.op = SM2_OP_MAX + ofi_ctrl_connreq;
-	cmd->msg.hdr.id = id;
-	cmd->msg.hdr.data = ep->region->pid;
-
-	tx_buf = smr_freestack_pop(sm2_inject_pool(peer_smr));
-	cmd->msg.hdr.src_data = sm2_get_offset(peer_smr, tx_buf);
-
-	cmd->msg.hdr.size = strlen(ep->name) + 1;
-	memcpy(tx_buf->data, ep->name, cmd->msg.hdr.size);
-
-	sm2_peer_data(ep->region)[id].name_sent = 1;
-	ofi_cirque_commit(sm2_cmd_queue(peer_smr));
-	peer_smr->cmd_cnt--;
-	sm2_signal(peer_smr);
-
-out:
-	pthread_spin_unlock(&peer_smr->lock);
-}
-
+/* Verify peer.
+What can we check here?  Ref-count is >0?
+*/
 int64_t sm2_verify_peer(struct sm2_ep *ep, fi_addr_t fi_addr)
 {
-	int64_t id;
-	int ret;
+	int32_t id;
+	int refcount;
+	struct sm2_av *sm2_av;
+	struct sm2_ep_allocation_entry *entries;
 
-	id = sm2_addr_lookup(ep->util_ep.av, fi_addr);
+	id = (int32_t)fi_addr;
 	assert(id < SM2_MAX_PEERS);
+	sm2_av = container_of(ep->util_ep.av, struct sm2_av, util_av);
 
-	if (sm2_peer_data(ep->region)[id].addr.id >= 0)
-		return id;
+	entries = sm2_mmap_entries(&sm2_av->sm2_mmap);
+	refcount = ofi_atomic_get32( &entries[id].refcount );
+	assert(refcount > 0);
+	sm2_coordinator_extend_for_entry(&sm2_av->sm2_mmap, id);
 
-	if (ep->region->map->peers[id].peer.id < 0) {
-		ret = sm2_map_to_region(&sm2_prov, ep->region->map, id);
-		if (ret == -ENOENT)
-			return -1;
+	return id;
 
-	}
-
-	sm2_send_name(ep, id);
-
-	return -1;
 }
 
 static int sm2_match_msg(struct dlist_entry *item, const void *args)
@@ -455,8 +421,8 @@ static int sm2_ep_close(struct fid *fid)
 
 	ofi_endpoint_close(&ep->util_ep);
 
-	if (ep->region)
-		sm2_free(ep->region);
+	// if (ep->region)
+	// 	sm2_free(ep->region);
 
 	if (ep->util_ep.ep_fid.msg != &sm2_no_recv_msg_ops)
 		sm2_srx_close(&ep->srx->fid);
@@ -857,13 +823,16 @@ static int sm2_ep_ctrl(struct fid *fid, int command, void *arg)
 		if (!ep->util_ep.av)
 			return -FI_ENOAV;
 
-		attr.name = sm2_no_prefix(ep->name);
+		//attr.name = sm2_no_prefix(ep->name);
+		attr.name = ep->name;
 		attr.rx_count = ep->rx_size;
 		attr.tx_count = ep->tx_size;
 		attr.flags = ep->util_ep.caps & FI_HMEM ?
 				SM2_FLAG_HMEM_ENABLED : 0;
 
-		ret = sm2_create(&sm2_prov, av->sm2_map, &attr, &ep->region);
+		ret = sm2_create(&sm2_prov, av->sm2_map, &attr, &av->sm2_mmap);
+		ep->mmap_regions = &av->sm2_mmap;
+
 		if (ret)
 			return ret;
 
@@ -884,7 +853,7 @@ static int sm2_ep_ctrl(struct fid *fid, int command, void *arg)
 			ep->util_ep.ep_fid.msg = &sm2_no_recv_msg_ops;
 			ep->util_ep.ep_fid.tagged = &sm2_no_recv_tag_ops;
 		}
-		sm2_exchange_all_peers(ep->region);
+		//sm2_exchange_all_peers(ep->region);
 
 		break;
 	default:
@@ -916,6 +885,7 @@ static int sm2_endpoint_name(struct sm2_ep *ep, char *name, char *addr,
 		snprintf(name, SM2_NAME_MAX - 1, "%s:%d:%d", addr, getuid(),
 			 ep->ep_idx);
 	else
+		/* this is an fi_ns:// address.*/
 		snprintf(name, SM2_NAME_MAX - 1, "%s", addr);
 
 	return 0;

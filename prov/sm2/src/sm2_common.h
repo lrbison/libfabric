@@ -200,7 +200,7 @@ struct sm2_map {
 	int 			num_peers;
 	uint16_t		flags;
 	struct ofi_rbmap	rbmap;
-	struct sm2_peer		peers[SM2_MAX_PEERS];
+	//struct sm2_peer		peers[SM2_MAX_PEERS];
 };
 
 struct sm2_region {
@@ -211,7 +211,6 @@ struct sm2_region {
 	uint8_t		cma_cap_peer;
 	uint8_t		cma_cap_self;
 	uint32_t	max_sar_buf_per_peer;
-	void		*base_addr;
 	pthread_spinlock_t	lock; /* lock for shm access
 				 Must hold smr->lock before tx/rx cq locks
 				 in order to progress or post recv */
@@ -269,10 +268,6 @@ struct sm2_sar_buf {
 OFI_DECLARE_CIRQUE(struct sm2_cmd, sm2_cmd_queue);
 OFI_DECLARE_CIRQUE(struct sm2_resp, sm2_resp_queue);
 
-static inline struct sm2_region *sm2_peer_region(struct sm2_region *smr, int i)
-{
-	return smr->map->peers[i].region;
-}
 static inline struct sm2_cmd_queue *sm2_cmd_queue(struct sm2_region *smr)
 {
 	return (struct sm2_cmd_queue *) ((char *) smr + smr->cmd_queue_offset);
@@ -328,21 +323,86 @@ int	sm2_map_to_region(const struct fi_provider *prov, struct sm2_map *map,
 void	sm2_map_to_endpoint(struct sm2_region *region, int64_t id);
 void	sm2_unmap_from_endpoint(struct sm2_region *region, int64_t id);
 void	sm2_exchange_all_peers(struct sm2_region *region);
-int	sm2_map_add(const struct fi_provider *prov,
-		    struct sm2_map *map, const char *name, int64_t *id);
 void	sm2_map_del(struct sm2_map *map, int64_t id);
 void	sm2_map_free(struct sm2_map *map);
 
-struct sm2_region *sm2_map_get(struct sm2_map *map, int64_t id);
+/* ---- */
 
-int	sm2_create(const struct fi_provider *prov, struct sm2_map *map,
-		   const struct sm2_attr *attr, struct sm2_region *volatile *smr);
+struct sm2_mmap {
+        char *base;
+        size_t size;
+        int fd;
+};
+
+int sm2_create(const struct fi_provider *prov, struct sm2_map *map,
+	       const struct sm2_attr *attr, struct sm2_mmap *sm2_mmap);
 void	sm2_free(struct sm2_region *smr);
 
 static inline void sm2_signal(struct sm2_region *smr)
 {
 	ofi_atomic_set32(&smr->signal, 1);
+};
+
+struct sm2_private_aux {
+	fi_addr_t	cqfid;
+};
+
+struct sm2_ep_allocation_entry {
+        int pid;
+        ofi_atomic32_t refcount;
+        char ep_name[SM2_NAME_MAX];
+};
+
+
+struct sm2_coord_file_header {
+        pthread_mutex_t write_lock;
+        ofi_atomic32_t	pid_lock_hint;
+        int             file_version;
+        int             ep_region_size;
+        int             ep_enumerations_max;
+
+        ptrdiff_t       ep_enumerations_offset; /* struct sm2_ep_allocation_entry */
+        ptrdiff_t       ep_regions_offset;      /* struct ep_region */
+        
+};
+
+static inline struct sm2_ep_allocation_entry *sm2_mmap_entries(struct sm2_mmap *map) {
+	struct sm2_coord_file_header *header = (void*)map->base;
+	return (struct sm2_ep_allocation_entry *) (map->base + header->ep_enumerations_offset);
 }
+
+static inline struct sm2_ep_region *sm2_mmap_ep_region(struct sm2_mmap *map, int id) {
+	struct sm2_coord_file_header *header = (void*)map->base;
+	return (struct sm2_ep_region *) (map->base + header->ep_regions_offset + header->ep_region_size*id);
+}
+
+/* @return True if pid is still alive. */
+static inline bool pid_lives(int pid) {
+	int err = kill( pid, 0 );
+	return err == 0;
+}
+
+static inline bool sm2_mapping_long_enough_check( struct sm2_mmap *map, int jentry ) {
+	ptrdiff_t entry_offset = (char*)sm2_mmap_ep_region(map, jentry+1) - map->base;
+	return entry_offset <= map->size;
+}
+
+
+
+ssize_t sm2_mmap_unmap_and_close(struct sm2_mmap *map );
+void* sm2_mmap_remap(struct sm2_mmap *map, size_t at_least );
+void* sm2_mmap_map(int fd, struct sm2_mmap *map );
+ssize_t sm2_coordinator_open_and_lock(struct sm2_mmap *map_shared);
+ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, int *av_key);
+int sm2_coordinator_lookup_entry(const char* name, struct sm2_mmap *map);
+ssize_t sm2_coordinator_free_entry(struct sm2_mmap *map, int av_key);
+ssize_t sm2_coordinator_lock(struct sm2_mmap *map);
+ssize_t sm2_coordinator_unlock(struct sm2_mmap *map);
+void* sm2_coordinator_extend_for_entry(struct sm2_mmap *map, int last_valid_entry);
+
+
+#define SM2_COORDINATION_FILE "/dev/shm/fi_sm2_mmaps"
+#define SM2_COORDINATION_DIR "/dev/shm"
 
 #ifdef __cplusplus
 }
