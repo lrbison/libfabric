@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2015-2018 Intel Corporation. All rights reserved.
+ * Copyright (c) 2023 Amazon.com, Inc. or its affiliates. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -102,7 +103,7 @@ struct fi_domain_attr sm2_domain_attr = {
 	.av_type = FI_AV_UNSPEC,
 	.mr_mode = FI_MR_BASIC | FI_MR_SCALABLE,
 	.mr_key_size = sizeof_field(struct fi_rma_iov, key),
-	.cq_data_size = sizeof_field(struct sm2_msg_hdr, data),
+	.cq_data_size = sizeof_field(struct sm2_free_queue_entry, data),
 	.cq_cnt = (1 << 10),
 	.ep_cnt = SM2_MAX_PEERS,
 	.tx_ctx_cnt = (1 << 10),
@@ -122,7 +123,7 @@ struct fi_domain_attr sm2_hmem_domain_attr = {
 	.av_type = FI_AV_UNSPEC,
 	.mr_mode = FI_MR_HMEM,
 	.mr_key_size = sizeof_field(struct fi_rma_iov, key),
-	.cq_data_size = sizeof_field(struct sm2_msg_hdr, data),
+	.cq_data_size = sizeof_field(struct sm2_free_queue_entry, data),
 	.cq_cnt = (1 << 10),
 	.ep_cnt = SM2_MAX_PEERS,
 	.tx_ctx_cnt = (1 << 10),

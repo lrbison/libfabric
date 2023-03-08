@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2015-2020 Intel Corporation. All rights reserved.
+ * Copyright (c) 2023 Amazon.com, Inc. or its affiliates. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -117,6 +118,7 @@ static int sm2_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr, size_t count
 	//ofi_mutex_lock(&util_av->lock);
 	ret = sm2_coordinator_free_entry(&sm2_av->sm2_mmap, *fi_addr);
 	//ofi_mutex_unlock(&util_av->lock);
+
 	return ret;
 }
 
