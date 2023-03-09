@@ -61,37 +61,23 @@ void sm2_cleanup(void)
 	pthread_mutex_unlock(&sm2_ep_list_lock);
 }
 
-static void sm2_peer_addr_init(struct sm2_addr *peer)
+size_t sm2_calculate_size_offsets(ptrdiff_t num_fqe,
+				  ptrdiff_t *rq_offset,
+				  ptrdiff_t *fq_offset)
 {
-	memset(peer->name, 0, SM2_NAME_MAX);
-	peer->id = -1;
-}
-
-size_t sm2_calculate_size_offsets(size_t num_fqe,
-				  size_t *recv_offset, size_t *fq_offset,
-				  size_t *peer_offset, size_t *name_offset)
-{
-	size_t recv_queue_offset, free_queue_offset;
-	size_t peer_data_offset, ep_name_offset;
 	size_t total_size;
 
-	/* Align recv_queue offset to 128-bit boundary. */
-	recv_queue_offset = ofi_get_aligned_size(sizeof(struct sm2_region), 16);
-	free_queue_offset = recv_queue_offset + sizeof(struct sm2_fifo);
-	peer_data_offset = free_queue_offset + freestack_size(sizeof(struct sm2_free_queue_entry), num_fqe);
-	ep_name_offset = peer_data_offset + sizeof(struct sm2_peer_data) * SM2_MAX_PEERS;
+	/* First memory block.  The header of an sm2_region */
+	total_size = sizeof(struct sm2_region);
 
-	if (recv_offset)
-		*recv_offset = recv_queue_offset;
-	if (fq_offset)
-		*fq_offset = free_queue_offset;
-	if (peer_offset)
-		*peer_offset = peer_data_offset;
-	if (name_offset)
-		*name_offset = ep_name_offset;
+	/* Second memory block: the recv_queue_fifo, an sm2_fifo */
+	if (rq_offset) *rq_offset = total_size;
+	total_size += sizeof(struct sm2_fifo);
 
-	total_size = ep_name_offset + sizeof(struct sm2_ep_name);
-
+	/* Third memory block: the message objects in a free queue */
+	if (fq_offset) *fq_offset = total_size;
+	total_size += freestack_size(sizeof(struct sm2_free_queue_entry), num_fqe);
+	
 	/*
  	 * Revisit later to see if we really need the size adjustment, or
  	 * at most align to a multiple of a page size.
@@ -103,23 +89,21 @@ size_t sm2_calculate_size_offsets(size_t num_fqe,
 
 
 int sm2_create(const struct fi_provider *prov, struct sm2_map *map,
-	       const struct sm2_attr *attr, struct sm2_mmap *sm2_mmap)
+	       const struct sm2_attr *attr, struct sm2_mmap *sm2_mmap, int *id)
 {
 	struct sm2_ep_name *ep_name;
 	size_t total_size;
-	size_t recv_queue_offset, free_stack_offset, peer_data_offset, name_offset;
-	int fd, ret, i, id;
+	ptrdiff_t recv_queue_offset, free_stack_offset;
+	int ret;
 	void *mapped_addr;
 	struct sm2_region *smr;
 
 	total_size = sm2_calculate_size_offsets(attr->num_fqe, &recv_queue_offset,
-					&free_stack_offset,
-					&peer_data_offset,
-					&name_offset);
+					&free_stack_offset);
 
 	FI_WARN(prov, FI_LOG_EP_CTRL, "Claiming an entry for (%s)\n", attr->name);
 	sm2_coordinator_lock(sm2_mmap);
-	ret = sm2_coordinator_allocate_entry(attr->name, sm2_mmap, &id);
+	ret = sm2_coordinator_allocate_entry(attr->name, sm2_mmap, id);
 	sm2_coordinator_unlock(sm2_mmap);
 
 	/* TODO: handle address-in-use error (FI_EBUSY?)*/
@@ -145,7 +129,7 @@ int sm2_create(const struct fi_provider *prov, struct sm2_map *map,
 		goto remove;
 	}
 
-	mapped_addr = sm2_mmap_ep_region(sm2_mmap, id);
+	mapped_addr = sm2_mmap_ep_region(sm2_mmap, *id);
 
 	if (mapped_addr == MAP_FAILED) {
 		FI_WARN(prov, FI_LOG_EP_CTRL, "mmap error\n");
@@ -166,21 +150,16 @@ int sm2_create(const struct fi_provider *prov, struct sm2_map *map,
 	pthread_mutex_unlock(&sm2_ep_list_lock);
 	smr = mapped_addr;
 
-	smr->map = map;
 	smr->version = SM2_VERSION;
 	smr->flags = attr->flags;
 	smr->total_size = total_size;
 	smr->recv_queue_offset = recv_queue_offset;
 	smr->free_stack_offset = free_stack_offset;
-	smr->peer_data_offset = peer_data_offset;
-	smr->name_offset = name_offset;
 
 	sm2_fifo_init(sm2_recv_queue(smr));
 	smr_freestack_init(sm2_free_stack(smr), attr->num_fqe, sizeof(struct sm2_free_queue_entry));
 
-	strncpy((char *) sm2_name(smr), attr->name, total_size - name_offset);
-
-	/* Must be set last to signal full initialization to peers */
+	/* TODO: still true?: Must be set last to signal full initialization to peers */
 	smr->pid = getpid();
 	return 0;
 

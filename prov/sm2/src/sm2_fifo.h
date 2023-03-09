@@ -58,47 +58,27 @@ struct sm2_fifo {
 	long int fifo_tail;
 };
 
-
-// TODO Remove PT2PT Hack to make Nemesis work for N writers to 1 receiver
-// TODO Remove Owning Region, it is the hack
-static inline long int virtual_addr_to_offset(struct sm2_region *owning_region,
-        struct sm2_free_queue_entry *fqe) {
-	return (long int) ((char *) fqe - (char *) owning_region);
-}
-
-// TODO Remove Owning Region, it is the hack
-static inline struct sm2_free_queue_entry*
-        offset_to_virtual_addr(struct sm2_region *owning_region,  long int fqe_offset)
-{
-	return (struct sm2_free_queue_entry *) ((char *) owning_region + fqe_offset);
-}
-
 // Initialize FIFO queue to empty state
 static inline void sm2_fifo_init(struct sm2_fifo *fifo)
 {
+	// ofi_atomic_initialize64( &fifo->fifo_head, SM2_FIFO_FREE );
+	// ofi_atomic_initialize64( &fifo->fifo_tail, SM2_FIFO_FREE );
 	fifo->fifo_head = SM2_FIFO_FREE;
 	fifo->fifo_tail = SM2_FIFO_FREE;
-}
-
-static inline bool sm2_fifo_empty(struct sm2_fifo* fifo)
-{
-	if (fifo->fifo_head == SM2_FIFO_FREE)
-		return true;
-	return false;
 }
 
 /* Write, Enqueue */
 // TODO Remove Owning Region, it is the pt2pt only hack
 // TODO Add Memory Barriers Back In
 // TODO Verify This is correct
-static inline void sm2_fifo_write(struct sm2_fifo *fifo, struct sm2_region *owning_region,
+static inline void sm2_fifo_write(struct sm2_fifo *fifo, struct sm2_mmap *map,
         struct sm2_free_queue_entry *fqe)
 {
 	struct sm2_free_queue_entry *prev_fqe;
-	long int offset = virtual_addr_to_offset(owning_region, fqe);
+	long int offset = sm2_absptr_to_relptr(fqe, map);
 	long int prev;
 
-	// Set next pointer to NULL
+	// Set next pointer to Free
 	fqe->nemesis_hdr.next = SM2_FIFO_FREE;
 
 	prev = atomic_swap_ptr(&fifo->fifo_tail, offset);
@@ -106,7 +86,8 @@ static inline void sm2_fifo_write(struct sm2_fifo *fifo, struct sm2_region *owni
 	assert(prev != offset);
 
 	if (OFI_LIKELY(SM2_FIFO_FREE != prev)) {
-		prev_fqe = offset_to_virtual_addr(owning_region, prev);
+		/* not empty */
+		prev_fqe = sm2_relptr_to_absptr(prev, map);
 		prev_fqe->nemesis_hdr.next = offset;
 	} else {
 		fifo->fifo_head = offset;
@@ -125,11 +106,10 @@ static inline struct sm2_free_queue_entry* sm2_fifo_read(struct sm2_fifo *fifo, 
 	if (SM2_FIFO_FREE == fifo->fifo_head) {
 		return NULL;
 	}
-	
+	// what if fifo_head changed?
 	prev_head = fifo->fifo_head;
-	struct sm2_region *owning_region = sm2_region_ptr_to_id(map, prev_head);
-	fqe = offset_to_virtual_addr(owning_region, fifo->fifo_head);
 
+	fqe = (struct sm2_free_queue_entry*)sm2_relptr_to_absptr(prev_head, map);
 	fifo->fifo_head = SM2_FIFO_FREE;
 
 	assert(fqe->nemesis_hdr.next != prev_head);
@@ -146,26 +126,20 @@ static inline struct sm2_free_queue_entry* sm2_fifo_read(struct sm2_fifo *fifo, 
 	return fqe;
 }
 
-// TODO Remove Owning Region
-// TODO use nemesis send instead of putting back on FQE
 static inline void sm2_fifo_write_back(struct sm2_free_queue_entry *fqe,
-        struct sm2_region *owning_region)
+        struct sm2_mmap *map)
 {
+	int id;
+	struct sm2_region *origin_smr;
+	struct sm2_fifo *origin_fifo;
+
+	id = sm2_region_ptr_to_id(map, fqe);
+	origin_smr = sm2_mmap_ep_region(map, id);
+	origin_fifo = sm2_recv_queue(origin_smr);
+
 	fqe->protocol_hdr.op_src = sm2_buffer_return;
 
-	// This is really bad b/c it will make our performance seem better than it actually is!
-	// Can't take this out b/c in sm2_progress_recv(), we have an assumption that the buffer
-	// that is sent to us is always from a peer.
-	// Three Fixes:
-	// 1. Fix Hack (long term)
-	// 2. Use a separate fifo queue for returning buffers (which we only call when we are out)
-	//	 BAD Hurts  performance
-	//	 BAD more work for something we will just delete later
-	// Do what we did here... cheap easy, except it makes us think we have better performance than we actually do
-
-	smr_freestack_push(sm2_free_stack(owning_region), fqe);
-
-	// sm2_fifo_write(sm2_recv_queue(owning_region), owning_region, fqe);
+	sm2_fifo_write(origin_fifo, map, fqe);
 }
 
 #endif /* _SM2_FIFO_H_ */

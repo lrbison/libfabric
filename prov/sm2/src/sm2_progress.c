@@ -87,7 +87,6 @@ static int sm2_start_common(struct sm2_ep *ep, struct sm2_free_queue_entry *fqe,
 					  &total_len, ep, 0);
 		break;
 	case sm2_buffer_return:
-		// TODO This is currently not being used b/c of hack
 		smr_freestack_push(sm2_free_stack(sm2_smr_region(ep,ep->self_fiaddr)), fqe);
 		break;
 	default:
@@ -118,10 +117,7 @@ static int sm2_start_common(struct sm2_ep *ep, struct sm2_free_queue_entry *fqe,
 				"unable to process rx completion\n");
 		} else {
 			/* Return Free Queue Entries here */
-			// TODO Shouldn't need this hack... should just be able to write FQE back with FQE
-			int owning_id = sm2_region_ptr_to_id(ep->mmap_regions, fqe);
-			struct sm2_region *owning_region = sm2_smr_region(ep,owning_id);
-			sm2_fifo_write_back(fqe, owning_region);
+			sm2_fifo_write_back(fqe, ep->mmap_regions);
 		}
 
 		sm2_get_peer_srx(ep)->owner_ops->free_entry(rx_entry);
@@ -204,16 +200,13 @@ out:
 void sm2_progress_recv(struct sm2_ep *ep)
 {
 	struct sm2_free_queue_entry *fqe;
-	// TODO Owning Region is part of hack!
-	// TODO Should this be 1, is self 0?
-	struct sm2_region *owning_region = sm2_smr_region(ep, ep->self_fiaddr);
+
+	struct sm2_region *self_region = sm2_smr_region(ep, ep->self_fiaddr);
+	struct sm2_fifo* self_fifo = sm2_recv_queue(self_region);
 	int ret = 0;
+	
 
-	// TODO SETH FIX THIS
-	while (!sm2_fifo_empty(sm2_recv_queue(ep->region))) {
-		// This will pop FQE off of FIFO recv queue, and we will own it until we return it
-		fqe = sm2_fifo_read(sm2_recv_queue(ep->region), owning_region);
-
+	while ( NULL != (fqe = sm2_fifo_read(self_fifo, ep->mmap_regions))) {
 		switch (fqe->protocol_hdr.op) {
 		case ofi_op_msg:
 		case ofi_op_tagged:

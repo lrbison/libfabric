@@ -96,6 +96,9 @@ static void sm2_resolve_addr(const char *node, const char *service,
  */
 static int sm2_shm_space_check(size_t tx_count, size_t rx_count)
 {
+// TODO: call this routine AFTER we have mmap, but BEFORE we allocate our space.
+// TODO: base the return value on the contents of the header region size.
+// TODO: And ignore existing file allocation size when stat() /dev/shm/
 	struct statvfs stat;
 	char shm_fs[] = "/dev/shm";
 	uint64_t available_size, shm_size_needed;
@@ -111,7 +114,7 @@ static int sm2_shm_space_check(size_t tx_count, size_t rx_count)
 	}
 	shm_size_needed = num_of_core *
 			  sm2_calculate_size_offsets(num_fqe,
-						     NULL, NULL, NULL, NULL);
+						     NULL, NULL);
 	err = statvfs(shm_fs, &stat);
 	if (err) {
 		FI_WARN(&sm2_prov, FI_LOG_CORE,
@@ -125,6 +128,7 @@ static int sm2_shm_space_check(size_t tx_count, size_t rx_count)
 			return -FI_ENOSPC;
 		}
 	}
+	// TODO: we should ignore space already reserved in the global shm file.
 	return 0;
 }
 

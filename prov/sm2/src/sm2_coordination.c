@@ -137,8 +137,8 @@ ssize_t sm2_coordinator_open_and_lock(struct sm2_mmap *map_shared)
 
 	ofi_atomic_initialize32( &header->pid_lock_hint, pid );
 	header->file_version = 1;
-	header->ep_region_size = 16777216;
-	header->ep_enumerations_max = 4096;
+	header->ep_region_size = 16777216; // TODO: base on sm2_calculate_size, and 
+	header->ep_enumerations_max = 4096; // TODO: base on FI_UNIVERSE size times 10 or 20 (many distinct universes)
 
 	header->ep_enumerations_offset = sizeof(struct sm2_coord_file_header);
 	header->ep_enumerations_offset = 
@@ -201,7 +201,7 @@ ssize_t sm2_coordinator_open_and_lock(struct sm2_mmap *map_shared)
 			sm2_mmap_unmap_and_close(map_shared);
 		}
 		/* we could not acquire the lock, sleep and try again. */
-		usleep(100);
+		usleep(10000);
 	} while (tries-- > 0);
 
 	switch(lock_status) {

@@ -38,6 +38,7 @@
 
 #include "ofi_iov.h"
 #include "ofi_hmem.h"
+#include "ofi_mem.h"
 #include "ofi_mr.h"
 #include "sm2_signal.h"
 #include "sm2.h"
@@ -61,11 +62,7 @@ int sm2_setname(fid_t fid, void *addr, size_t addrlen)
 	}
 
 	ep = container_of(fid, struct sm2_ep, util_ep.ep_fid.fid);
-	if (ep->region) {
-		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
-			"Cannot set name after EP has been enabled\n");
-		return -FI_EBUSY;
-	}
+
 
 	name = strdup(addr);
 	if (!name)
@@ -288,23 +285,26 @@ static ssize_t sm2_do_inject(struct sm2_ep *ep, struct sm2_region *peer_smr, int
 {
 	struct sm2_fifo *fifo;
 	struct sm2_free_queue_entry *fqe;
+	struct sm2_region *self_region;
 
 	fifo = sm2_recv_queue(peer_smr);
 
-	if (smr_freestack_isempty(sm2_free_stack(ep->region))) {
+	self_region = sm2_smr_region(ep, ep->self_fiaddr);
+
+	if (smr_freestack_isempty(sm2_free_stack(self_region))) {
 		sm2_progress_recv(ep);
-		if (smr_freestack_isempty(sm2_free_stack(ep->region))) {
+		if (smr_freestack_isempty(sm2_free_stack(self_region))) {
 			return -FI_EAGAIN;
 		}
 	}
 
 	// Pop FQE from local region for sending
-	fqe = smr_freestack_pop(sm2_free_stack(ep->region));
+	fqe = smr_freestack_pop(sm2_free_stack(self_region));
 
 	sm2_generic_format(fqe, peer_id, op, tag, data, op_flags);
 	sm2_format_inject(fqe, iface, device, iov, iov_count, peer_smr);
 
-	sm2_fifo_write(fifo, ep->region, fqe);
+	sm2_fifo_write(fifo, ep->mmap_regions, fqe);
 	return FI_SUCCESS;
 }
 
@@ -782,7 +782,7 @@ static int sm2_ep_ctrl(struct fid *fid, int command, void *arg)
 	struct sm2_domain *domain;
 	struct sm2_ep *ep;
 	struct sm2_av *av;
-	int ret;
+	int ret, self_id;
 
 	ep = container_of(fid, struct sm2_ep, util_ep.ep_fid.fid);
 	av = container_of(ep->util_ep.av, struct sm2_av, util_av);
@@ -800,8 +800,9 @@ static int sm2_ep_ctrl(struct fid *fid, int command, void *arg)
 		attr.num_fqe = ep->tx_size;
 		attr.flags = ep->util_ep.caps & 0;
 
-		ret = sm2_create(&sm2_prov, av->sm2_map, &attr, &av->sm2_mmap);
+		ret = sm2_create(&sm2_prov, av->sm2_map, &attr, &av->sm2_mmap, &self_id);
 		ep->mmap_regions = &av->sm2_mmap;
+		ep->self_fiaddr = self_id;
 
 		if (ret)
 			return ret;
