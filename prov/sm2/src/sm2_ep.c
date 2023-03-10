@@ -203,17 +203,18 @@ What can we check here?  Ref-count is >0?
 int64_t sm2_verify_peer(struct sm2_ep *ep, fi_addr_t fi_addr)
 {
 	int32_t id;
-	int refcount;
 	struct sm2_av *sm2_av;
 	struct sm2_ep_allocation_entry *entries;
 
 	id = (int32_t)fi_addr;
-	assert(id < SM2_MAX_PEERS);
+	if (id > SM2_MAX_PEERS || id < 0) {
+		fprintf(stderr,"Send to invalid fi_addr.  Aborting\n");
+		abort();
+	};
 	sm2_av = container_of(ep->util_ep.av, struct sm2_av, util_av);
-
 	entries = sm2_mmap_entries(&sm2_av->sm2_mmap);
-	refcount = ofi_atomic_get32( &entries[id].refcount );
-	assert(refcount > 0);
+	if (entries[id].pid <= 0) return -FI_EAGAIN;
+	
 	sm2_coordinator_extend_for_entry(&sm2_av->sm2_mmap, id);
 
 	return id;

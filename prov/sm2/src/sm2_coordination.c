@@ -8,7 +8,6 @@
 
 #include "sm2.h"
 
-
 #define NEXT_MULTIPLE_OF(x, mod) x%mod ? ((x/mod)+1)*mod : x
 
 /**
@@ -50,6 +49,7 @@ void* sm2_mmap_remap(struct sm2_mmap *map, size_t at_least )
 	struct stat st;
 	int err;
 
+	/* return quickly if no need to check the file. */
 	if (map->size >= at_least) return map->base;
 
 	err = fstat(map->fd, &st);
@@ -157,7 +157,7 @@ ssize_t sm2_coordinator_open_and_lock(struct sm2_mmap *map_shared)
 	header = sm2_mmap_remap(&map_ours, header->ep_regions_offset);
 	entries = sm2_mmap_entries(&map_ours);
 	for (int jentry=0; jentry<header->ep_enumerations_max; jentry++) {
-		ofi_atomic_initialize32( &entries[jentry].refcount, 0 );
+		entries[jentry].pid = 0;
 	}
 	
 	lock_status = 'F'; /* failed */
@@ -237,18 +237,24 @@ ssize_t sm2_coordinator_open_and_lock(struct sm2_mmap *map_shared)
 /**
  * @brief insert the name into the ep_enumerations array.  Requires the lock.
  * 
- * @param[in] name
- * @param[inout] map
- * @param[out] av_key
+ * Note that because of speculative av_insert operations, we may need to
+ * assign an index for an endpoint claimed by another peer.
+ * 
+ * @param[in] name	The name/string of the endpoint address
+ * @param[inout] map	sm2_mmap object: the global shared file.
+ * @param[out] av_key	The address we have assigned to the peer.
+ * @param[in] self	When true, we will "own" the entry (entry.pid = getpid())
+ *			When False, we set pid = -getpid(), allowing owner to claim later
  * @return 0 on success, some negative FI_ERROR on error
 */
-ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, int *av_key)
+ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, int *av_key, bool self)
 {
 
 	struct sm2_coord_file_header *header = (void*)map->base;
 	struct sm2_ep_allocation_entry *entries;
 	int jentry;
 	int pid = getpid();
+	int peer_pid;
 #ifndef NDEBUG
 	{
 		int pid = getpid();
@@ -260,7 +266,7 @@ ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, i
 	entries = sm2_mmap_entries(map);
 	
 	jentry = sm2_coordinator_lookup_entry(name, map);
-	if (jentry >= 0) {
+	if (jentry >= 0 && entries[jentry].pid > 0) {
 		FI_WARN( &sm2_prov, FI_LOG_AV,
 			"during sm2 allocation of space for endpoint named %s"
 			" an existing conflicting address was found at AV[%d]\n",
@@ -279,11 +285,26 @@ ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, i
 			return -1;
 		}
 	}
+	if (jentry >= 0 && entries[jentry].pid < 0) {
+		if (!pid_lives( entries[jentry].pid )) {
+			FI_WARN( &sm2_prov, FI_LOG_AV,
+				"during sm2 allocation of space for endpoint named %s"
+				" pid %d pre-allocated space at AV[%d] and then died!\n",
+				name, -entries[jentry].pid, jentry);
+		}
+		goto found;
+	}
 
-	/* good: we could not find the entry, so now look for an empty slot */
+	/* fine, we could not find the entry, so now look for an empty slot */
 	for (jentry=0; jentry < header->ep_enumerations_max; jentry++) {
-		if (ofi_atomic_cas_bool32(&entries[jentry].refcount, 0, 1)) {
-			goto found;
+		peer_pid = abs(entries[jentry].pid);
+		if (peer_pid == 0) goto found;
+		if (!pid_lives(peer_pid)) {
+			struct sm2_region *peer_region = sm2_mmap_ep_region(map, jentry);
+			if (smr_freestack_isfull(sm2_free_stack(peer_region))) {
+				/* we found a slot with a dead PID and a*/
+				goto found;
+			};
 		}
 	}
 
@@ -291,14 +312,14 @@ ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, i
 	return -FI_EAVAIL;
 
 found:
-	entries[jentry].pid = pid;
+	if (self) entries[jentry].pid = pid;
+	if (!self) entries[jentry].pid = -pid;
 
 	FI_WARN(&sm2_prov, FI_LOG_AV,
 		"Allocated sm2 region for %s at AV[%d]\n",
 		name, jentry);
 	strncpy(entries[jentry].ep_name, name, SM2_NAME_MAX);
 	*av_key = jentry;
-	ofi_atomic_initialize32(&entries[jentry].refcount, 1);
 	
 	/* With the entry allocated, we now need to ensure it's mapped. */
 	if (!sm2_mapping_long_enough_check( map, jentry )) {
@@ -338,7 +359,7 @@ int sm2_coordinator_lookup_entry(const char* name, struct sm2_mmap *map)
 }
 
 /**
- * @brief decrement the refcount for the entry.
+ * @brief clear the pid for this entry.  must already hold lock.
  * 
  * @param[in] name
  * @param[inout] map
@@ -347,12 +368,11 @@ int sm2_coordinator_lookup_entry(const char* name, struct sm2_mmap *map)
 ssize_t sm2_coordinator_free_entry(struct sm2_mmap *map, int av_key)
 {
 	struct sm2_ep_allocation_entry *entries;
-	//int pid = getpid();
-	//assert( header->pid_lock_hint == pid );
-
+	int pid = getpid();
+	(void) pid;
 	entries = sm2_mmap_entries(map);
-	
-	ofi_atomic_dec32(&entries[av_key].refcount);
+	assert( entries[av_key].pid == pid );
+	entries[av_key].pid = 0;
 	return 0;
 }
 

@@ -226,6 +226,7 @@ struct smr_freestack {
 };
 
 #define smr_freestack_isempty(fs)	((fs)->top == SMR_FREESTACK_EMPTY)
+#define smr_freestack_isfull(fs)	((fs)->free == (fs)->size)
 
 static inline void* smr_freestack_get_entry_from_index(struct smr_freestack *fs,
 		int16_t index)

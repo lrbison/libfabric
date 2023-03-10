@@ -70,12 +70,11 @@ static int sm2_av_insert(struct fid_av *av_fid, const void *addr, size_t count,
 	sm2_av = container_of(util_av, struct sm2_av, util_av);
 
 	/* acquire the lock */
-	// sm2_coordinator_lock(&sm2_av->sm2_mmap);
+	sm2_coordinator_lock(&sm2_av->sm2_mmap);
 
 
 	for (i = 0; i < count; i++, addr = (char *) addr + strlen(addr) + 1) {
-		// ret = sm2_coordinator_allocate_entry(addr, &sm2_av->sm2_mmap, &util_addr);
-		util_addr = sm2_coordinator_lookup_entry(addr, &sm2_av->sm2_mmap);
+		util_addr = sm2_coordinator_allocate_entry(addr, &sm2_av->sm2_mmap, &util_addr, false);
 		ret = util_addr >= 0 ? 0 : -1;
 		if (ret && util_av->eq) {
 			ofi_av_write_event(util_av, i, -ret, context);
@@ -97,7 +96,7 @@ static int sm2_av_insert(struct fid_av *av_fid, const void *addr, size_t count,
 		succ_count++;
 	}
 	/* release the lock */
-	// sm2_coordinator_unlock(&sm2_av->sm2_mmap);
+	sm2_coordinator_unlock(&sm2_av->sm2_mmap);
 
 	if (flags & FI_EVENT) {
 		ofi_av_write_event(util_av, succ_count, 0, context);
@@ -115,9 +114,9 @@ static int sm2_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr, size_t count
 	util_av = container_of(av_fid, struct util_av, av_fid);
 	sm2_av = container_of(util_av, struct sm2_av, util_av);
 
-	//ofi_mutex_lock(&util_av->lock);
+	ofi_mutex_lock(&util_av->lock);
 	ret = sm2_coordinator_free_entry(&sm2_av->sm2_mmap, *fi_addr);
-	//ofi_mutex_unlock(&util_av->lock);
+	ofi_mutex_unlock(&util_av->lock);
 
 	return ret;
 }

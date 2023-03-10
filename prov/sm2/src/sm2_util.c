@@ -103,7 +103,7 @@ int sm2_create(const struct fi_provider *prov, struct sm2_map *map,
 
 	FI_WARN(prov, FI_LOG_EP_CTRL, "Claiming an entry for (%s)\n", attr->name);
 	sm2_coordinator_lock(sm2_mmap);
-	ret = sm2_coordinator_allocate_entry(attr->name, sm2_mmap, id);
+	ret = sm2_coordinator_allocate_entry(attr->name, sm2_mmap, id, true);
 	sm2_coordinator_unlock(sm2_mmap);
 
 	/* TODO: handle address-in-use error (FI_EBUSY?)*/

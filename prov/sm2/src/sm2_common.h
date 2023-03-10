@@ -31,8 +31,8 @@
  * SOFTWARE.
  */
 
-#ifndef _OFI_SM2_H_
-#define _OFI_SM2_H_
+#ifndef _OFI_SM2_COMMON_H_
+#define _OFI_SM2_COMMON_H_
 
 #include "config.h"
 
@@ -201,15 +201,14 @@ struct sm2_private_aux {
 
 struct sm2_ep_allocation_entry {
         int pid;
-        ofi_atomic32_t refcount;
         char ep_name[SM2_NAME_MAX];
 };
 
 
 struct sm2_coord_file_header {
+	int             file_version;
         pthread_mutex_t write_lock;
         ofi_atomic32_t	pid_lock_hint;
-        int             file_version;
         int             ep_region_size;
         int             ep_enumerations_max;
 
@@ -274,7 +273,7 @@ ssize_t sm2_mmap_unmap_and_close(struct sm2_mmap *map );
 void* sm2_mmap_remap(struct sm2_mmap *map, size_t at_least );
 void* sm2_mmap_map(int fd, struct sm2_mmap *map );
 ssize_t sm2_coordinator_open_and_lock(struct sm2_mmap *map_shared);
-ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, int *av_key);
+ssize_t sm2_coordinator_allocate_entry(const char* name, struct sm2_mmap *map, int *av_key, bool self);
 int sm2_coordinator_lookup_entry(const char* name, struct sm2_mmap *map);
 ssize_t sm2_coordinator_free_entry(struct sm2_mmap *map, int av_key);
 ssize_t sm2_coordinator_lock(struct sm2_mmap *map);
@@ -289,4 +288,4 @@ void* sm2_coordinator_extend_for_entry(struct sm2_mmap *map, int last_valid_entr
 }
 #endif
 
-#endif /* _OFI_SM2_H_ */
+#endif /* _OFI_SM2_COMMON_H_ */
