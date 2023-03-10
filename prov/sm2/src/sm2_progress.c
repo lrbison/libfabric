@@ -86,9 +86,6 @@ static int sm2_start_common(struct sm2_ep *ep, struct sm2_free_queue_entry *fqe,
 					  rx_entry->iov, rx_entry->count,
 					  &total_len, ep, 0);
 		break;
-	case sm2_buffer_return:
-		smr_freestack_push(sm2_free_stack(sm2_smr_region(ep,ep->self_fiaddr)), fqe);
-		break;
 	default:
 		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
 			"unidentified operation type\n");
@@ -203,6 +200,10 @@ void sm2_progress_recv(struct sm2_ep *ep)
 	int ret = 0;
 
 	while ( NULL != (fqe = sm2_fifo_read(ep)) ) {
+		if (fqe->protocol_hdr.op_src == sm2_buffer_return ) {
+			smr_freestack_push(sm2_free_stack(sm2_smr_region(ep,ep->self_fiaddr)), fqe);
+			continue;
+		}
 		switch (fqe->protocol_hdr.op) {
 		case ofi_op_msg:
 		case ofi_op_tagged:
