@@ -50,6 +50,8 @@ void* sm2_mmap_remap(struct sm2_mmap *map, size_t at_least )
 	struct stat st;
 	int err;
 
+	if (map->size >= at_least) return map->base;
+
 	err = fstat(map->fd, &st);
 	if (err) goto out;
 
