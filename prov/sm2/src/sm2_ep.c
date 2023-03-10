@@ -283,11 +283,8 @@ static ssize_t sm2_do_inject(struct sm2_ep *ep, struct sm2_region *peer_smr, int
 			     const struct iovec *iov, size_t iov_count, size_t total_len,
 			     void *context)
 {
-	struct sm2_fifo *fifo;
 	struct sm2_free_queue_entry *fqe;
 	struct sm2_region *self_region;
-
-	fifo = sm2_recv_queue(peer_smr);
 
 	self_region = sm2_smr_region(ep, ep->self_fiaddr);
 
@@ -298,13 +295,13 @@ static ssize_t sm2_do_inject(struct sm2_ep *ep, struct sm2_region *peer_smr, int
 		}
 	}
 
-	// Pop FQE from local region for sending
+	/* Pop FQE from local region for sending */
 	fqe = smr_freestack_pop(sm2_free_stack(self_region));
 
 	sm2_generic_format(fqe, peer_id, op, tag, data, op_flags);
 	sm2_format_inject(fqe, iface, device, iov, iov_count, peer_smr);
 
-	sm2_fifo_write(fifo, ep->mmap_regions, fqe);
+	sm2_fifo_write(ep, peer_id, fqe);
 	return FI_SUCCESS;
 }
 

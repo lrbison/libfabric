@@ -117,7 +117,7 @@ static int sm2_start_common(struct sm2_ep *ep, struct sm2_free_queue_entry *fqe,
 				"unable to process rx completion\n");
 		} else {
 			/* Return Free Queue Entries here */
-			sm2_fifo_write_back(fqe, ep->mmap_regions);
+			sm2_fifo_write_back(ep, fqe);
 		}
 
 		sm2_get_peer_srx(ep)->owner_ops->free_entry(rx_entry);
@@ -200,13 +200,9 @@ out:
 void sm2_progress_recv(struct sm2_ep *ep)
 {
 	struct sm2_free_queue_entry *fqe;
-
-	struct sm2_region *self_region = sm2_smr_region(ep, ep->self_fiaddr);
-	struct sm2_fifo* self_fifo = sm2_recv_queue(self_region);
 	int ret = 0;
-	
 
-	while ( NULL != (fqe = sm2_fifo_read(self_fifo, ep->mmap_regions))) {
+	while ( NULL != (fqe = sm2_fifo_read(ep)) ) {
 		switch (fqe->protocol_hdr.op) {
 		case ofi_op_msg:
 		case ofi_op_tagged:
