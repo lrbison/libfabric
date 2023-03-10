@@ -80,11 +80,7 @@ static int sm2_av_insert(struct fid_av *av_fid, const void *addr, size_t count,
 		if (ret && util_av->eq) {
 			ofi_av_write_event(util_av, i, -ret, context);
 		}
-		if (ret) {
-			/* ensure we have mapped the region for this peer */
-			sm2_coordinator_extend_for_entry(&sm2_av->sm2_mmap, util_addr);
-			continue;
-		}
+		if (ret) continue;
 
 		if (flags & FI_AV_USER_ID) {
 			sm2_av->sm2_aux[util_addr].cqfid = fi_addr[i];

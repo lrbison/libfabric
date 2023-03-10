@@ -90,10 +90,10 @@ static inline void sm2_fifo_write(struct sm2_ep *ep, int peer_id,
 
 	if (OFI_LIKELY(SM2_FIFO_FREE != prev)) {
 		/* not empty */
-		// if (prev + sizeof(fqe) > map->size) {
-		// 	/* Need to re-map */
-		// 	sm2_mmap_remap(map, prev + sizeof(fqe));
-		// }
+		if (prev + sizeof(fqe) > map->size) {
+			/* Need to re-map */
+			sm2_mmap_remap(map, prev + sizeof(fqe));
+		}
 
 		prev_fqe = sm2_relptr_to_absptr(prev, map);
 		prev_fqe->nemesis_hdr.next = offset;
