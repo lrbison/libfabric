@@ -547,10 +547,14 @@ bool efa_rdm_ep_support_rdma_read(struct rxr_ep *ep)
 static inline
 bool efa_rdm_ep_support_rdma_write(struct rxr_ep *ep)
 {
+	EFA_WARN_ONCE(FI_LOG_EP_CTRL, "Does EP allow use_device_rdma? %d\n",ep->use_device_rdma);
 	if (!ep->use_device_rdma)
 		return false;
 
 #if HAVE_CAPS_RDMA_WRITE
+	EFA_WARN_ONCE(FI_LOG_EP_CTRL, "CAPS_RDMA_WRITE exists.  Does device report RDMA_WRITE? %d\n",
+		EFADV_DEVICE_ATTR_CAPS_RDMA_WRITE ==
+		(rxr_ep_domain(ep)->device->device_caps & EFADV_DEVICE_ATTR_CAPS_RDMA_WRITE));
 	return rxr_ep_domain(ep)->device->device_caps & EFADV_DEVICE_ATTR_CAPS_RDMA_WRITE;
 #else
 	return false;

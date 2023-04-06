@@ -58,6 +58,15 @@ static int run(void)
 	if (ret)
 		return ret;
 
+	if (opts.rma_op == FT_RMA_WRITE) {
+		printf("Performing RMA Write\n");
+	} else if (opts.rma_op == FT_RMA_READ) {
+		printf("Performing RMA Read\n");
+	} else if (opts.rma_op == FT_RMA_WRITEDATA) {
+		printf("Performing RMA Writedata\n");
+	}
+
+
 	if (!(opts.options & FT_OPT_SIZE)) {
 		for (i = 0; i < TEST_CNT; i++) {
 			if (!ft_use_size(i, opts.sizes_enabled))

@@ -34,6 +34,7 @@
 #define EFA_RDM_PEER_H
 
 #include "rxr.h"
+#include "efa_prov.h"
 
 
 #define EFA_RDM_PEER_DEFAULT_REORDER_BUFFER_SIZE	(16384)
@@ -168,8 +169,13 @@ bool efa_both_support_rdma_read(struct rxr_ep *ep, struct efa_rdm_peer *peer)
 static inline
 bool efa_both_support_rdma_write(struct rxr_ep *ep, struct efa_rdm_peer *peer)
 {
-	return efa_rdm_ep_support_rdma_write(ep) &&
+	bool val = efa_rdm_ep_support_rdma_write(ep) &&
 	       (peer->is_self || efa_rdm_peer_support_rdma_write(peer));
+	EFA_WARN_ONCE(FI_LOG_FABRIC,"Do both peers support write? self:%d remote:%d, answer:%d\n",
+		efa_rdm_ep_support_rdma_write(ep),
+		efa_rdm_peer_support_rdma_write(peer),
+		val);
+	return val;
 }
 
 /**

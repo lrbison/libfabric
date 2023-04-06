@@ -60,7 +60,7 @@ bool efa_rdm_get_use_device_rdma(uint32_t fabric_api_version)
 	uint32_t vendor_part_id;
 
 	vendor_part_id = g_device_list[0].ibv_attr.vendor_part_id;
-	hw_support = efa_device_support_rdma_read();
+	hw_support = efa_device_support_rdma_read() | efa_device_support_rdma_write();
 
 	if (FI_VERSION_GE(fabric_api_version, FI_VERSION(1,18))) {
 		default_val = hw_support;

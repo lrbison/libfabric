@@ -51,6 +51,7 @@
 #include "rxr_tp.h"
 #include "rxr_cntr.h"
 #include "efa_rdm_srx.h"
+#include "efa_prov.h"
 
 void recv_rdma_with_imm_completion(struct rxr_ep *ep, int32_t imm_data, uint64_t flags, struct rxr_pkt_entry *pkt_entry);
 

@@ -70,6 +70,8 @@ ssize_t efa_dgram_rma_post_read(struct efa_dgram_ep *ep, const struct fi_msg_rma
 	struct ibv_sge sge_list[EFA_DEV_ATTR_MAX_WR_SGE];
 #endif
 	int i;
+	EFA_WARN(FI_LOG_CQ, "Temporary Error: DO NOT ISSUE RDMA READ!\n");
+	return -FI_EINVAL;
 
 	if (OFI_UNLIKELY(msg->iov_count > ep->base_ep.domain->device->ibv_attr.max_sge_rd)) {
 		EFA_WARN(FI_LOG_CQ, "invalid iov_count!\n");

@@ -47,6 +47,7 @@
 #include "rxr_op_entry.h"
 #include "rxr_pkt_cmd.h"
 #include "rxr_pkt_pool.h"
+#include "efa_prov.h"
 
 /**
  * @brief allocate a packet entry
@@ -473,6 +474,8 @@ int rxr_pkt_entry_read(struct rxr_ep *ep, struct rxr_pkt_entry *pkt_entry,
 	if (peer && peer->is_local && ep->use_shm_for_tx) {
 		err = fi_read(ep->shm_ep, local_buf, len, efa_mr_get_shm_desc(desc), peer->shm_fiaddr, remote_buf, remote_key, pkt_entry);
 	} else {
+		EFA_WARN(FI_LOG_CQ, "Temporary Error: DO NOT ISSUE RDMA READ!\n");
+		return -FI_EINVAL;
 		self_comm = (peer == NULL);
 		if (self_comm)
 			pkt_entry->flags |= RXR_PKT_ENTRY_LOCAL_READ;
@@ -545,6 +548,8 @@ int rxr_pkt_entry_write(struct rxr_ep *ep, struct rxr_pkt_entry *pkt_entry,
 		err = fi_write(ep->shm_ep, local_buf, len, efa_mr_get_shm_desc(desc), peer->shm_fiaddr, remote_buf, remote_key, pkt_entry);
 	} else {
 		assert(((struct efa_mr *)desc)->ibv_mr);
+
+		EFA_WARN_ONCE(FI_LOG_EP_DATA, "Actually issuing write!\n");
 
 		self_comm = (peer == NULL);
 		if (self_comm)
