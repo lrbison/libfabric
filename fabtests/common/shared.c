@@ -517,6 +517,7 @@ void ft_free_host_tx_buf(void)
 int ft_alloc_msgs(void)
 {
 	int ret;
+	int rma_resv_bytes;
 	long alignment = 1;
 
 	if (buf)
@@ -537,6 +538,13 @@ int ft_alloc_msgs(void)
 		buf_size = MAX(tx_size, FT_MAX_CTRL_MSG) * opts.window_size +
 			   MAX(rx_size, FT_MAX_CTRL_MSG) * opts.window_size;
 	}
+
+	/* Allow enough space for RMA to operate in a distinct memory
+	 * region that ft_sync() won't touch.
+	 */
+	rma_resv_bytes = FT_RMA_SYNC_MSG_BYTES +
+			 MAX( ft_tx_prefix_size(), ft_rx_prefix_size() );
+	buf_size += rma_resv_bytes*2;
 
 	if (opts.options & FT_OPT_ALIGN && !(opts.options & FT_OPT_USE_DEVICE)) {
 		alignment = sysconf(_SC_PAGESIZE);
@@ -567,7 +575,9 @@ int ft_alloc_msgs(void)
 	if (opts.options & FT_OPT_ALLOC_MULT_MR)
 		tx_buf = (char *) buf + MAX(rx_size, FT_MAX_CTRL_MSG);
 	else
-		tx_buf = (char *) buf + MAX(rx_size, FT_MAX_CTRL_MSG) * opts.window_size;
+		tx_buf = (char *) buf +
+			 MAX(rx_size, FT_MAX_CTRL_MSG) * opts.window_size +
+			 rma_resv_bytes;
 
 	remote_cq_data = ft_init_cq_data(fi);
 
