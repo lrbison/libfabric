@@ -266,6 +266,24 @@ int bandwidth(void)
 	return 0;
 }
 
+#define CHECK_CALL(x) { int ret; ret = x; if(ret) return ret; }
+int ft_sync_test(bool drained, bool repost)
+{
+	if (drained)
+		CHECK_CALL( ft_post_rx(ep, rx_size, &rx_ctx) )
+	if (opts.dst_addr) {
+		CHECK_CALL( ft_tx(ep, remote_fi_addr, 1, &tx_ctx) )
+		CHECK_CALL( ft_get_rx_comp(rx_seq) )
+	} else {
+		CHECK_CALL( ft_get_rx_comp(rx_seq) )
+		CHECK_CALL( ft_tx(ep, remote_fi_addr, 1, &tx_ctx) )
+	}
+	if (repost)
+		CHECK_CALL( ft_post_rx(ep, rx_size, &rx_ctx) )
+
+	return 0;
+}
+
 /**
  * @brief Get completions of RMA operations, and verify_data if requested
  *
@@ -294,15 +312,7 @@ static int bw_rma_comp(enum ft_rma_opcodes rma_op, int valid_windows)
 			return ret;
 
 		if (rma_op == FT_RMA_WRITE && ft_check_opts(FT_OPT_VERIFY_DATA)) {
-			if (!opts.dst_addr) {
-				ret = bw_tx_comp();
-				ret |= rma_bw_rx_comp();
-				ret |= bw_tx_comp();
-			} else {
-				ret = rma_bw_rx_comp();
-				ret |= bw_tx_comp();
-				ret |= rma_bw_rx_comp();
-			}
+			ft_sync_test(true, false);
 		}
 	}
 	if (ret || !ft_check_opts(FT_OPT_VERIFY_DATA))
@@ -324,9 +334,15 @@ int bandwidth_rma(enum ft_rma_opcodes rma_op, struct fi_rma_iov *remote)
 	if (opts.options & FT_OPT_ENABLE_HMEM)
 		inject_size = 0;
 
-	ret = ft_sync();
+	/* this call drains the pre-posted rx buffer.*/
+	ret = ft_sync_test(false, false);
 	if (ret)
 		return ret;
+	/*
+	 * I have confirmed that during the loop, ft_sync is never called,
+	 * and that ft_sync_test(false,false) will hang (ie, no lingering rx
+	 * buffer is posted).
+	 */
 
 	offset_rma_start = FT_RMA_SYNC_MSG_BYTES +
 			   MAX(ft_tx_prefix_size(), ft_rx_prefix_size());
@@ -340,11 +356,15 @@ int bandwidth_rma(enum ft_rma_opcodes rma_op, struct fi_rma_iov *remote)
 					opts.transfer_size * opts.window_size);
 				if (ret)
 					return ret;
+				/* fill rx with wrong data, by starting at byte + 1 */
+				ret = ft_fill_buf(rx_buf + offset_rma_start + 1,
+					opts.transfer_size * opts.window_size - 1);
+				if (ret)
+					return ret;
 
 				/* ensure we have finished filling before
-				 * remote is allowed to read. */
-				if (rma_op == FT_RMA_READ)
-					ft_sync();
+				 * remote is allowed to read or write. */
+				ft_sync_test(true, false);
 			}
 		}
 		switch (rma_op) {
@@ -396,16 +416,22 @@ int bandwidth_rma(enum ft_rma_opcodes rma_op, struct fi_rma_iov *remote)
 
 		if (++j == opts.window_size) {
 			ret = bw_rma_comp(rma_op, j);
-			if (ret)
+			if (ret) {
+				printf("Validation failure on iteration %d.\n",i/j);
 				return ret;
+			}
 			j = 0;
 		}
 		offset += opts.transfer_size;
 	}
 	ret = bw_rma_comp(rma_op, j);
-	if (ret)
+	if (ret) {
+		printf("Validation failure at end!.\n");
 		return ret;
+	}
 	ft_stop();
+	ft_sync_test(true, true);
+
 
 	if (opts.machr)
 		show_perf_mr(opts.transfer_size, opts.iterations, &start, &end,	1,
