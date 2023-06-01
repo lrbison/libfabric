@@ -323,6 +323,10 @@ static ssize_t smr_generic_sendmsg(struct smr_ep *ep, const struct iovec *iov,
 				   (struct ofi_mr **)desc, iov, iov_count, total_len,
 				   context, &ce->cmd);
 	if (ret) {
+		if (ret != -FI_EAGAIN)
+			FI_WARN(&smr_prov, FI_LOG_EP_CTRL, "Error in smr_generic_sendmsg op: %ld\n", ret);
+		if (ret == -FI_ENOMEM)
+			ret = -FI_EAGAIN;
 		smr_cmd_queue_discard(ce, pos);
 		goto unlock_cq;
 	}

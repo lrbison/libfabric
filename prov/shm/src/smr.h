@@ -417,9 +417,15 @@ static inline struct smr_inject_buf *
 smr_get_txbuf(struct smr_region *smr)
 {
 	struct smr_inject_buf * txbuf;
+	struct smr_freestack* fs;
 
 	pthread_spin_lock(&smr->lock);
-	txbuf = smr_freestack_pop(smr_inject_pool(smr));
+	fs = smr_inject_pool(smr);
+	if (smr_freestack_isempty(fs)) {
+		FI_WARN(&smr_prov, FI_LOG_EP_DATA, "Freestack is empty!");
+		txbuf = NULL;
+	} else
+		txbuf = smr_freestack_pop(fs);
 	pthread_spin_unlock(&smr->lock);
 
 	return txbuf;

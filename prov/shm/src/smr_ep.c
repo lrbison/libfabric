@@ -234,6 +234,8 @@ static void smr_send_name(struct smr_ep *ep, int64_t id)
 	if (ret == -FI_ENOENT)
 		return;
 	tx_buf = smr_get_txbuf(peer_smr);
+	if (!tx_buf)
+		return;
 
 	ce->cmd.msg.hdr.op = SMR_OP_MAX + ofi_ctrl_connreq;
 	ce->cmd.msg.hdr.id = id;
@@ -700,6 +702,10 @@ static ssize_t smr_do_inject(struct smr_ep *ep, struct smr_region *peer_smr, int
 	struct smr_inject_buf *tx_buf;
 
 	tx_buf = smr_get_txbuf(peer_smr);
+	if (!tx_buf) {
+		FI_WARN(&smr_prov, FI_LOG_EP_DATA, "smr_do_inject failing");
+		return -FI_ENOMEM;
+	}
 
 	smr_generic_format(cmd, peer_id, op, tag, data, op_flags);
 	smr_format_inject(cmd, desc, iov, iov_count, peer_smr, tx_buf);
