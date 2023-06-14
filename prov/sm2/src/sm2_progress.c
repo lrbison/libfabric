@@ -332,9 +332,6 @@ out:
 
 void sm2_progress_recv(struct sm2_ep *ep)
 {
-	struct sm2_av *av =
-		container_of(ep->util_ep.av, struct sm2_av, util_av);
-	struct sm2_mmap *map = &av->mmap;
 	struct sm2_atomic_entry *atomic_entry;
 	struct sm2_xfer_entry *xfer_entry;
 	int ret = 0, i;
@@ -368,13 +365,10 @@ void sm2_progress_recv(struct sm2_ep *ep)
 			}
 
 			ofi_spin_lock(&ep->tx_lock);
-			smr_freestack_push(
-				sm2_freestack(sm2_mmap_ep_region(map, ep->gid)),
-				xfer_entry);
+			sm2_freestack_push(ep, xfer_entry);
 			ofi_spin_unlock(&ep->tx_lock);
 			continue;
 		}
-
 		switch (xfer_entry->hdr.op) {
 		case ofi_op_msg:
 		case ofi_op_tagged:

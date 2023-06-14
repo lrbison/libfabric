@@ -312,4 +312,14 @@ int sm2_query_atomic(struct fid_domain *domain, enum fi_datatype datatype,
 		     enum fi_op op, struct fi_atomic_attr *attr,
 		     uint64_t flags);
 
+inline static void sm2_freestack_push(struct sm2_ep *ep,
+				      struct sm2_xfer_entry *xfer_entry)
+{
+	struct sm2_av *av =
+		container_of(ep->util_ep.av, struct sm2_av, util_av);
+	struct sm2_mmap *map = &av->mmap;
+	struct sm2_region *region = sm2_mmap_ep_region(map, ep->gid);
+	smr_freestack_push(sm2_freestack(region), xfer_entry);
+}
+
 #endif /* _SM2_H_ */
