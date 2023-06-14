@@ -292,11 +292,19 @@ static inline size_t sm2_pop_xfer_entry(struct sm2_ep *ep,
 
 	if (smr_freestack_isempty(sm2_freestack(self_region))) {
 		sm2_progress_recv(ep);
+		self_region = sm2_mmap_ep_region(map, ep->gid);
 		if (smr_freestack_isempty(sm2_freestack(self_region)))
 			return -FI_EAGAIN;
 	}
-
 	*xfer_entry = smr_freestack_pop(sm2_freestack(self_region));
+
+	/* ensure we haven't over-exhausted the freestack: */
+	assert(sm2_freestack(self_region)->free >= 0);
+	/* ensure the freestack pointer is within this endpoint's region of
+	 * memory: */
+	assert((char *) *xfer_entry >= (char *) sm2_freestack(self_region));
+	assert((char *) *xfer_entry <
+	       (char *) sm2_mmap_ep_region(map, ep->gid + 1));
 	return FI_SUCCESS;
 }
 
