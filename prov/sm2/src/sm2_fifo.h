@@ -270,7 +270,7 @@ static inline struct sm2_xfer_entry *sm2_fifo_read(struct sm2_ep *ep)
 static inline void sm2_fifo_write_back(struct sm2_ep *ep,
 				       struct sm2_xfer_entry *xfer_entry)
 {
-	xfer_entry->hdr.proto = sm2_proto_return;
+	xfer_entry->hdr.proto = sm2_proto_inject_return;
 	assert(xfer_entry->hdr.sender_gid != ep->gid);
 	sm2_fifo_write(ep, xfer_entry->hdr.sender_gid, xfer_entry);
 }

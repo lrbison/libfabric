@@ -87,7 +87,7 @@ extern pthread_mutex_t sm2_ep_list_lock;
 
 enum {
 	sm2_proto_inject,
-	sm2_proto_return,
+	sm2_proto_inject_return,
 	sm2_proto_max,
 };
 
@@ -112,13 +112,14 @@ struct sm2_xfer_hdr {
 		volatile long int next;
 		struct sm2_ep *ep;
 	};
-	uint64_t size;
+	uint64_t size; /* total size of the entire transfer */
 	uint64_t cq_data;
 	uint64_t tag;
 	uint64_t context;
 	uint32_t op;
 	uint32_t op_flags;
-	uint32_t proto;
+	uint16_t proto;
+	uint16_t proto_flags;
 	sm2_gid_t sender_gid;
 };
 
