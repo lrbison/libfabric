@@ -131,6 +131,7 @@ ssize_t sm2_rma_cmd_fill_sar_xfer(struct sm2_xfer_entry *xfer_entry,
 	struct sm2_rma_msg *msg;
 	struct sm2_cmd_sar_rma_msg *cmd_rma;
 	struct fi_rma_iov *cmd_iov;
+	struct sm2_cmd_sar_msg *cmd_msg;
 
 	msg = &ctx->msg;
 
@@ -138,7 +139,10 @@ ssize_t sm2_rma_cmd_fill_sar_xfer(struct sm2_xfer_entry *xfer_entry,
 	sm2_generic_format(xfer_entry, ctx->ep->gid, ctx->op, 0, msg->data,
 			   ctx->op_flags, msg->context);
 	cmd_rma = (struct sm2_cmd_sar_rma_msg *) xfer_entry->user_data;
+	cmd_msg = (struct sm2_cmd_sar_msg *) xfer_entry->user_data;
+
 	memset(cmd_rma, 0, sizeof(*cmd_rma));
+	cmd_msg->data_size = 0;
 	cmd_rma->sar_hdr.context = ctx;
 
 	payload_used = 0;
@@ -179,17 +183,19 @@ ssize_t sm2_rma_cmd_fill_sar_xfer(struct sm2_xfer_entry *xfer_entry,
 		ctx->bytes_sent += bytes_to_send;
 	}
 
-	rma_consumed = 0;
-	cmd_iov = &cmd_rma->rma_iov[0];
-	while (rma_consumed < payload_used) {
-		cmd_iov->len =
-			MIN(msg->rma_iov[0].len, payload_used - rma_consumed);
-		cmd_iov->addr = msg->rma_iov[0].addr;
-		cmd_iov->key = msg->rma_iov[0].key;
-		ofi_consume_rma_iov(msg->rma_iov, &msg->rma_iov_count,
-				    cmd_iov->len);
-		rma_consumed += cmd_iov->len;
-		cmd_iov++;
+	if (msg->rma_iov_count) {
+		rma_consumed = 0;
+		cmd_iov = &cmd_rma->rma_iov[0];
+		while (rma_consumed < payload_used) {
+			cmd_iov->len =
+				MIN(msg->rma_iov[0].len, payload_used - rma_consumed);
+			cmd_iov->addr = msg->rma_iov[0].addr;
+			cmd_iov->key = msg->rma_iov[0].key;
+			ofi_consume_rma_iov(msg->rma_iov, &msg->rma_iov_count,
+					cmd_iov->len);
+			rma_consumed += cmd_iov->len;
+			cmd_iov++;
+		}
 	}
 
 	if (ctx->bytes_sent == ctx->bytes_total) {

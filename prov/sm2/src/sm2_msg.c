@@ -37,6 +37,112 @@
 
 #include "ofi_iov.h"
 #include "sm2.h"
+#include "sm2_fifo.h"
+#include "sm2_rma.h"
+
+static inline int sm2_select_proto(void **desc, size_t iov_count,
+				   uint64_t op_flags, uint64_t total_len)
+{
+	if (total_len > SM2_INJECT_SIZE)
+		return sm2_proto_sar;
+	else
+		return sm2_proto_inject;
+}
+
+void sm2_fill_sar_ctx_msg(struct sm2_ep *ep, const struct fi_msg_tagged *msg,
+			  uint32_t op, uint64_t op_flags, sm2_gid_t peer_gid,
+			  struct sm2_sar_ctx *ctx)
+{
+	ctx->ep = ep;
+	ctx->msg.context = msg->context;
+	ctx->msg.rma_iov_count = 0;
+	ctx->msg.iov_count = msg->iov_count;
+	ctx->msg.addr = msg->addr;
+	ctx->msg.data = msg->data;
+	ctx->msg.tag = msg->tag;
+
+	assert(msg->iov_count <= SM2_IOV_LIMIT);
+
+	memset(ctx->msg.desc, 0, msg->iov_count * sizeof(*msg->desc));
+	if (msg->desc) {
+		memcpy(ctx->msg.desc, &msg->desc,
+		       msg->iov_count * sizeof(*msg->desc));
+	}
+	memcpy(ctx->msg.msg_iov, msg->msg_iov,
+	       msg->iov_count * sizeof(*msg->msg_iov));
+
+	ctx->bytes_sent = 0;
+	ctx->bytes_acked = 0;
+	ctx->bytes_total = ofi_total_iov_len(msg->msg_iov, msg->iov_count);
+	ctx->msgs_in_flight = 0;
+	ctx->peer_gid = peer_gid;
+	ctx->op = op;
+	ctx->op_flags = op_flags;
+	ctx->status_flags = 0;
+}
+
+ssize_t sm2_do_sar_msg(struct sm2_ep *ep, struct sm2_region *peer_smr,
+		       sm2_gid_t peer_gid, uint32_t op, uint64_t tag,
+		       uint64_t data, uint64_t op_flags, struct ofi_mr **mr,
+		       const struct iovec *iov, size_t iov_count,
+		       size_t total_len, void *context)
+{
+	struct sm2_xfer_entry *xfer_entry;
+	struct sm2_sar_ctx *ctx;
+	struct fi_msg_tagged msg;
+	ssize_t ret;
+
+	ret = sm2_pop_xfer_entry(ep, &xfer_entry);
+	if (ret)
+		return ret;
+
+	ret = sm2_alloc_rma_ctx(ep, &ctx);
+	if (ret) {
+		return -FI_EAGAIN;
+	}
+
+	msg.tag = tag;
+	msg.data = data;
+	msg.msg_iov = iov;
+	msg.iov_count = iov_count;
+	sm2_fill_sar_ctx_msg(ep, &msg, op, op_flags, peer_gid, ctx);
+
+	sm2_generic_format(xfer_entry, ep->gid, op, tag, data, op_flags,
+			   context);
+
+	while (ctx->msgs_in_flight < 16 &&
+	       ctx->bytes_sent != ctx->bytes_total) {
+		ret = sm2_pop_xfer_entry(ep, &xfer_entry);
+		if (ret) {
+			if (ctx->msgs_in_flight == 0) {
+				sm2_free_rma_ctx(ctx);
+				ret = -FI_EAGAIN;
+			} else
+				ret = FI_SUCCESS;
+			return ret;
+		}
+		ret = sm2_rma_cmd_fill_sar_xfer(xfer_entry, ctx);
+		if (!ret)
+			sm2_fifo_write(ep, peer_gid, xfer_entry);
+		else {
+			sm2_rma_handle_local_error(ep, xfer_entry, ctx, ret);
+			break;
+		}
+	}
+
+	if (!(op_flags & FI_DELIVERY_COMPLETE) &&
+	    ctx->bytes_sent == ctx->bytes_total) {
+		ret = sm2_complete_tx(ep, msg.context, op, op_flags);
+		if (!ret)
+			ctx->status_flags |= FI_SM2_SAR_STATUS_COMPLETED;
+		else
+			FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+				"unable to process tx completion\n");
+		ret = FI_SUCCESS;
+	}
+
+	return FI_SUCCESS;
+}
 
 static ssize_t sm2_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 			   uint64_t flags)
@@ -85,6 +191,7 @@ static ssize_t sm2_generic_sendmsg(struct sm2_ep *ep, const struct iovec *iov,
 	ssize_t ret = 0;
 	size_t total_len;
 	struct ofi_mr **mr = (struct ofi_mr **) desc;
+	int proto;
 
 	assert(iov_count <= SM2_IOV_LIMIT);
 
@@ -99,9 +206,11 @@ static ssize_t sm2_generic_sendmsg(struct sm2_ep *ep, const struct iovec *iov,
 	total_len = ofi_total_iov_len(iov, iov_count);
 	assert(!(op_flags & FI_INJECT) || total_len <= SM2_INJECT_SIZE);
 
-	ret = sm2_proto_ops[sm2_proto_inject](ep, peer_smr, peer_gid, op, tag,
-					      data, op_flags, mr, iov,
-					      iov_count, total_len, context);
+	proto = sm2_select_proto(desc, iov_count, op_flags, total_len);
+
+	ret = sm2_proto_ops[proto](ep, peer_smr, peer_gid, op, tag, data,
+				   op_flags, mr, iov, iov_count, total_len,
+				   context);
 	if (ret)
 		goto unlock_cq;
 

@@ -176,6 +176,7 @@ struct sm2_cmd_sar_hdr {
 
 struct sm2_cmd_sar_msg {
 	struct sm2_cmd_sar_hdr sar_hdr;
+	uint32_t data_size;
 	uint8_t user_data[];
 };
 
@@ -258,6 +259,7 @@ struct sm2_rma_msg {
 	size_t rma_iov_count;
 	void *context;
 	uint64_t data;
+	uint64_t tag;
 };
 
 struct sm2_sar_ctx {
@@ -330,6 +332,11 @@ int sm2_complete_tx(struct sm2_ep *ep, void *context, uint32_t op,
 int sm2_complete_rx(struct sm2_ep *ep, void *context, uint32_t op,
 		    uint64_t flags, size_t len, void *buf, sm2_gid_t gid,
 		    uint64_t tag, uint64_t data);
+ssize_t sm2_do_sar_msg(struct sm2_ep *ep, struct sm2_region *peer_smr,
+		       sm2_gid_t peer_gid, uint32_t op, uint64_t tag,
+		       uint64_t data, uint64_t op_flags, struct ofi_mr **mr,
+		       const struct iovec *iov, size_t iov_count,
+		       size_t total_len, void *context);
 
 static inline uint64_t sm2_rx_cq_flags(uint32_t op, uint64_t rx_flags,
 				       uint16_t op_flags)
