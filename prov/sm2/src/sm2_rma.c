@@ -49,8 +49,8 @@ void sm2_rma_handle_remote_error(struct sm2_ep *ep,
 	    0 == (ctx->status_flags & FI_SM2_SAR_STATUS_COMPLETED)) {
 		ret = sm2_write_err_comp(
 			ep->util_ep.tx_cq, (void *) xfer_entry->hdr.context,
-			xfer_entry->hdr.op_flags, 0, xfer_entry->hdr.cq_data,
-			-FI_EREMOTEIO);
+			xfer_entry->hdr.op_flags, xfer_entry->hdr.tag,
+			xfer_entry->hdr.cq_data, -FI_EREMOTEIO);
 		if (!ret)
 			ctx->status_flags |= FI_SM2_SAR_STATUS_COMPLETED;
 		else
@@ -72,10 +72,10 @@ void sm2_rma_handle_local_error(struct sm2_ep *ep,
 	ctx->status_flags |= FI_SM2_SAR_ERROR_FLAG;
 
 	if (0 == (ctx->status_flags & FI_SM2_SAR_STATUS_COMPLETED)) {
-		ret = sm2_write_err_comp(ep->util_ep.tx_cq,
-					 (void *) xfer_entry->hdr.context,
-					 xfer_entry->hdr.op_flags, 0,
-					 xfer_entry->hdr.cq_data, err);
+		ret = sm2_write_err_comp(
+			ep->util_ep.tx_cq, (void *) xfer_entry->hdr.context,
+			xfer_entry->hdr.op_flags, xfer_entry->hdr.tag,
+			xfer_entry->hdr.cq_data, err);
 		if (!ret)
 			ctx->status_flags |= FI_SM2_SAR_STATUS_COMPLETED;
 		else
@@ -120,12 +120,13 @@ void sm2_fill_rma_ctx(struct sm2_ep *ep, const struct fi_msg_rma *msg,
 	ctx->status_flags = 0;
 }
 
+/* LAR-TODO: rename to sm2_cmd_fill_sar_xfer */
 ssize_t sm2_rma_cmd_fill_sar_xfer(struct sm2_xfer_entry *xfer_entry,
 				  struct sm2_sar_ctx *ctx)
 {
-	ssize_t bytes_to_send, payload_used, rma_consumed;
+	ssize_t bytes_to_send, payload_used, rma_consumed, payload_avail;
 	int ret;
-	void *src, *dest;
+	uint8_t *src, *dest;
 	enum fi_hmem_iface iface;
 	uint64_t device;
 	struct sm2_rma_msg *msg;
@@ -161,15 +162,22 @@ ssize_t sm2_rma_cmd_fill_sar_xfer(struct sm2_xfer_entry *xfer_entry,
 		return FI_SUCCESS;
 	}
 
-	while (payload_used < SM2_RMA_INJECT_SIZE &&
+	if (ctx->op == ofi_op_msg || ctx->op == ofi_op_tagged) {
+		payload_avail = SM2_INJECT_SIZE - sizeof(*cmd_msg);
+		dest = (uint8_t *) &cmd_msg->user_data;
+	} else {
+		payload_avail = SM2_RMA_INJECT_SIZE;
+		dest = (uint8_t *) &cmd_rma->user_data;
+	}
+
+	while (payload_used < payload_avail &&
 	       ctx->bytes_sent != ctx->bytes_total) {
 		bytes_to_send = msg->msg_iov[0].iov_len;
 		bytes_to_send =
-			MIN(bytes_to_send, SM2_RMA_INJECT_SIZE - payload_used);
+			MIN(bytes_to_send, payload_avail - payload_used);
 
 		src = (uint8_t *) msg->msg_iov[0].iov_base;
 		sm2_get_iface_device(msg->desc[0], &iface, &device);
-		dest = cmd_rma->user_data + payload_used;
 		assert(payload_used < SM2_INJECT_SIZE);
 
 		ret = ofi_copy_from_hmem(iface, device, dest, src,
@@ -181,9 +189,12 @@ ssize_t sm2_rma_cmd_fill_sar_xfer(struct sm2_xfer_entry *xfer_entry,
 
 		payload_used += bytes_to_send;
 		ctx->bytes_sent += bytes_to_send;
+		dest += bytes_to_send;
 	}
 
-	if (msg->rma_iov_count) {
+	if (ctx->op == ofi_op_msg || ctx->op == ofi_op_tagged) {
+		cmd_msg->data_size = payload_used;
+	} else {
 		rma_consumed = 0;
 		cmd_iov = &cmd_rma->rma_iov[0];
 		while (rma_consumed < payload_used) {

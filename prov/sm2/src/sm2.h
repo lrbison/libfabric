@@ -85,9 +85,12 @@
 #define FI_SM2_SAR_RETURN	     (1 << 2)
 #define FI_SM2_SAR_ERROR_FLAG	     (1 << 3)
 #define FI_SM2_SAR_STATUS_COMPLETED  (1 << 4)
+#define FI_SM2_SAR_CTS		     (1 << 5)
+#define FI_SM2_SAR_RESUME	     (1 << 6)
 
 /* the number of messages SAR protocol should attempt to keep in flight. */
 #define SM2_SAR_IN_FLIGHT_TARGET_RMA 1
+#define SM2_SAR_IN_FLIGHT_TARGET_MSG 16
 
 extern struct fi_provider sm2_prov;
 extern struct fi_info sm2_info;
@@ -181,6 +184,7 @@ struct sm2_cmd_sar_msg {
 };
 
 struct sm2_cmd_sar_rma_msg {
+	/* sar_hdr must be first */
 	struct sm2_cmd_sar_hdr sar_hdr;
 	struct fi_rma_iov rma_iov[SM2_IOV_LIMIT];
 	uint8_t user_data[];

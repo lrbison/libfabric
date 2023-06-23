@@ -43,61 +43,20 @@
 #include "sm2_fifo.h"
 #include "sm2_rma.h"
 
-static int sm2_progress_inject(struct sm2_xfer_entry *xfer_entry,
-			       struct ofi_mr **mr, struct iovec *iov,
-			       size_t iov_count, size_t *total_len,
-			       struct sm2_ep *ep, int err)
+static int sm2_issue_recv_completion(struct sm2_ep *ep,
+				     struct sm2_xfer_entry *xfer_entry,
+				     struct fi_peer_rx_entry *rx_entry, int err)
 {
-	ssize_t hmem_copy_ret;
-
-	hmem_copy_ret =
-		ofi_copy_to_mr_iov(mr, iov, iov_count, 0, xfer_entry->user_data,
-				   xfer_entry->hdr.size);
-
-	if (hmem_copy_ret < 0) {
-		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
-			"Inject recv failed with code %d\n",
-			(int) (-hmem_copy_ret));
-		return hmem_copy_ret;
-	} else if (hmem_copy_ret != xfer_entry->hdr.size) {
-		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "Inject recv truncated\n");
-		return -FI_ETRUNC;
-	}
-
-	*total_len = hmem_copy_ret;
-
-	return FI_SUCCESS;
-}
-
-static int sm2_start_common(struct sm2_ep *ep,
-			    struct sm2_xfer_entry *xfer_entry,
-			    struct fi_peer_rx_entry *rx_entry,
-			    bool return_xfer_entry)
-{
-	size_t total_len = 0;
-	uint64_t comp_flags;
 	void *comp_buf;
+	uint64_t comp_flags;
+	ssize_t total_len = rx_entry->size;
 	int ret;
-	uint64_t err = 0;
-
-	switch (xfer_entry->hdr.proto) {
-	case sm2_proto_inject:
-		err = sm2_progress_inject(
-			xfer_entry, (struct ofi_mr **) rx_entry->desc,
-			rx_entry->iov, rx_entry->count, &total_len, ep, 0);
-		break;
-	default:
-		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
-			"Unidentified operation type\n");
-		err = -FI_EINVAL;
-	}
 
 	comp_buf = rx_entry->iov[0].iov_base;
 	comp_flags = sm2_rx_cq_flags(xfer_entry->hdr.op, rx_entry->flags,
 				     xfer_entry->hdr.op_flags);
 
 	if (err) {
-		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "Error processing op\n");
 		ret = sm2_write_err_comp(ep->util_ep.rx_cq, rx_entry->context,
 					 comp_flags, rx_entry->tag,
 					 xfer_entry->hdr.cq_data, err);
@@ -111,14 +70,135 @@ static int sm2_start_common(struct sm2_ep *ep,
 	if (ret) {
 		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
 			"Unable to process rx completion\n");
-	} else if (return_xfer_entry) {
+	}
+	return ret;
+}
+
+static int sm2_do_inject_recv(struct sm2_ep *ep,
+			      struct sm2_xfer_entry *xfer_entry,
+			      struct fi_peer_rx_entry *rx_entry,
+			      bool unexp_start)
+{
+	struct ofi_mr **mr = (struct ofi_mr **) rx_entry->desc;
+	struct iovec *iov = rx_entry->iov;
+	size_t iov_count = rx_entry->count;
+	int ret;
+
+	ret = (int) ofi_copy_to_mr_iov(mr, iov, iov_count, 0,
+				       xfer_entry->user_data,
+				       xfer_entry->hdr.size);
+
+	if (ret < 0) {
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+			"Inject recv failed with code %d\n", (-ret));
+	} else if (ret != xfer_entry->hdr.size) {
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "Inject recv truncated\n");
+		ret = -FI_ETRUNC;
+	} else {
+		ret = 0;
+	}
+
+	ret = sm2_issue_recv_completion(ep, xfer_entry, rx_entry, ret);
+
+	if (!unexp_start) {
 		/* Return Free Queue Entries here */
 		sm2_fifo_write_back(ep, xfer_entry);
 	}
-
 	sm2_get_peer_srx(ep)->owner_ops->free_entry(rx_entry);
 
-	return 0;
+	return ret;
+}
+
+static int sm2_do_sar_recv(struct sm2_ep *ep, struct sm2_xfer_entry *xfer_entry,
+			   struct fi_peer_rx_entry *rx_entry, bool unexp_start)
+{
+	struct ofi_mr **mr = (struct ofi_mr **) rx_entry->desc;
+	struct iovec *iov = rx_entry->iov;
+	size_t iov_count = rx_entry->count;
+	struct sm2_cmd_sar_msg *cmd_msg = (void *) xfer_entry->user_data;
+	struct sm2_cmd_sar_msg *cmd_msg_trigger;
+	struct sm2_xfer_entry *xfer_entry_trigger;
+
+	int ret;
+
+	ret = (int) ofi_copy_to_mr_iov(mr, iov, iov_count, 0,
+				       cmd_msg->user_data, cmd_msg->data_size);
+	/* LAR-TODO: better way to do this?  we lose our buffer addr for CQE at
+	 * the end */
+	ofi_consume_iov_desc(iov, rx_entry->desc, &rx_entry->count,
+			     cmd_msg->data_size);
+
+	if (ret < 0) {
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+			"Inject recv failed with code %d\n", (-ret));
+	} else if (ret != xfer_entry->hdr.size) {
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "Inject recv truncated\n");
+		ret = -FI_ETRUNC;
+	} else {
+		ret = 0;
+	}
+
+	if (ret) {
+		ret = sm2_issue_recv_completion(ep, xfer_entry, rx_entry, ret);
+
+		/* LAR-TODO: Need to store some error status locally so we
+		 * can avoid multiple completions on error... uh... use
+		 * iov_count? */
+		rx_entry->count = -1;
+	}
+
+	bool last_msg =
+		(cmd_msg->sar_hdr.proto_flags & FI_SM2_SAR_LAST_MESSAGE_FLAG);
+	if (rx_entry->count == 0 && last_msg) {
+		ret = sm2_issue_recv_completion(ep, xfer_entry, rx_entry, ret);
+	}
+
+	if (unexp_start && !last_msg) {
+		/* trigger sender with CTS. */
+		/* LAR-TODO: Need error handling here */
+		sm2_pop_xfer_entry(ep, &xfer_entry_trigger);
+		memcpy(xfer_entry_trigger, xfer_entry,
+		       sizeof(xfer_entry->hdr) + sizeof(cmd_msg->sar_hdr));
+		cmd_msg_trigger = (void *) xfer_entry_trigger->user_data;
+		cmd_msg_trigger->sar_hdr.proto_flags |= FI_SM2_SAR_CTS;
+		cmd_msg_trigger->sar_hdr.proto_flags |= FI_SM2_SAR_RESUME;
+		cmd_msg_trigger->sar_hdr.proto_flags &= ~FI_SM2_SAR_RETURN;
+		xfer_entry_trigger->hdr.sender_gid = ep->gid;
+		sm2_fifo_write(ep, xfer_entry->hdr.sender_gid,
+			       xfer_entry_trigger);
+	} else {
+		/* Return Free Queue Entries here */
+		cmd_msg->sar_hdr.proto_flags |= FI_SM2_SAR_CTS;
+		sm2_sar_write_back(ep, xfer_entry);
+	}
+
+	if (last_msg)
+		sm2_get_peer_srx(ep)->owner_ops->free_entry(rx_entry);
+
+	return ret;
+}
+
+/* LAR-TODO: rename to sm2_start_common_recv (ie, not ATOMIC/RMA)*/
+/* LAR-TODO: fix unexp_start name! */
+static int sm2_start_common(struct sm2_ep *ep,
+			    struct sm2_xfer_entry *xfer_entry,
+			    struct fi_peer_rx_entry *rx_entry, bool unexp_start)
+{
+	int ret = 0;
+
+	switch (xfer_entry->hdr.proto) {
+	case sm2_proto_inject:
+		ret = sm2_do_inject_recv(ep, xfer_entry, rx_entry, unexp_start);
+		break;
+	case sm2_proto_sar:
+		ret = sm2_do_sar_recv(ep, xfer_entry, rx_entry, unexp_start);
+		break;
+	default:
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+			"Unidentified operation type\n");
+		ret = -FI_EINVAL;
+	}
+	return ret;
 }
 
 int sm2_unexp_start(struct fi_peer_rx_entry *rx_entry)
@@ -162,6 +242,7 @@ static int sm2_progress_recv_msg(struct sm2_ep *ep,
 	struct sm2_av *sm2_av;
 	fi_addr_t addr;
 	int ret;
+	int (*queue_func)(struct fi_peer_rx_entry *);
 
 	sm2_av = container_of(ep->util_ep.av, struct sm2_av, util_av);
 	addr = sm2_av->reverse_lookup[xfer_entry->hdr.sender_gid];
@@ -170,29 +251,20 @@ static int sm2_progress_recv_msg(struct sm2_ep *ep,
 		ret = peer_srx->owner_ops->get_tag(
 			peer_srx, addr, xfer_entry->hdr.size,
 			xfer_entry->hdr.tag, &rx_entry);
-		if (ret == -FI_ENOENT) {
-			ret = sm2_alloc_xfer_entry_ctx(ep, rx_entry,
-						       xfer_entry);
-			sm2_fifo_write_back(ep, xfer_entry);
-			if (ret)
-				return ret;
-
-			ret = peer_srx->owner_ops->queue_tag(rx_entry);
-			goto out;
-		}
+		queue_func = peer_srx->owner_ops->queue_tag;
 	} else {
 		ret = peer_srx->owner_ops->get_msg(
 			peer_srx, addr, xfer_entry->hdr.size, &rx_entry);
-		if (ret == -FI_ENOENT) {
-			ret = sm2_alloc_xfer_entry_ctx(ep, rx_entry,
-						       xfer_entry);
-			sm2_fifo_write_back(ep, xfer_entry);
-			if (ret)
-				return ret;
+		queue_func = peer_srx->owner_ops->queue_msg;
+	}
+	if (ret == -FI_ENOENT) {
+		ret = sm2_alloc_xfer_entry_ctx(ep, rx_entry, xfer_entry);
+		sm2_fifo_write_back(ep, xfer_entry);
+		if (ret)
+			return ret;
 
-			ret = peer_srx->owner_ops->queue_msg(rx_entry);
-			goto out;
-		}
+		ret = (*queue_func)(rx_entry);
+		goto out;
 	}
 	if (ret) {
 		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL, "Error getting rx_entry\n");
@@ -459,26 +531,80 @@ out:
 	return err;
 }
 
+/* this function is called after the receiver has matched the message and is
+   ready for the firehose */
+static int sm2_progress_sar_msg_resume(struct sm2_ep *ep,
+				       struct sm2_xfer_entry *xfer_entry)
+{
+	struct sm2_cmd_sar_hdr *sar_hdr = (void *) xfer_entry->user_data;
+	struct sm2_sar_ctx *ctx = (void *) sar_hdr->context;
+	int ret;
+
+	if (xfer_entry->hdr.sender_gid == ep->gid) {
+		/* we triggered the resume.  just return this xfer_entry.
+		   Data will come shortly */
+		sm2_freestack_push(ep, xfer_entry);
+		return FI_SUCCESS;
+	}
+	/* Otherwise, we are sender and receiver requested resume data. */
+
+	/* return their entry first */
+	sm2_sar_write_back(ep, xfer_entry);
+
+	/* start sending more data */
+	while (ctx->bytes_sent != ctx->bytes_total &&
+	       ctx->msgs_in_flight < SM2_SAR_IN_FLIGHT_TARGET_MSG) {
+		ret = sm2_pop_xfer_entry(ep, &xfer_entry);
+		if (ret) {
+			/* LAR-TODO: now what !?
+			   maybe ping-pong this packet until we have entries
+			   available?
+			 */
+		}
+		ret = sm2_rma_cmd_fill_sar_xfer(xfer_entry, ctx);
+		if (!ret)
+			sm2_fifo_write(ep, ctx->peer_gid, xfer_entry);
+		else {
+			sm2_rma_handle_local_error(ep, xfer_entry, ctx, ret);
+			break;
+		}
+	}
+
+	if (!(ctx->op_flags & FI_DELIVERY_COMPLETE) &&
+	    ctx->bytes_sent == ctx->bytes_total) {
+		ret = sm2_complete_tx(ep, ctx->msg.context, ctx->op,
+				      ctx->op_flags);
+		if (!ret)
+			ctx->status_flags |= FI_SM2_SAR_STATUS_COMPLETED;
+		else
+			FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+				"unable to process tx completion\n");
+		ret = FI_SUCCESS;
+	}
+	return ret;
+}
+
+/* Fills data into an xfer_entry for either message send or write by originator.
+ */
+/* LAR-TODO: rename to sm2_progress_sar_send_xfer */
 static int sm2_progress_rma_write_origin(struct sm2_ep *ep,
 					 struct sm2_xfer_entry *xfer_entry)
 {
-	struct sm2_cmd_sar_rma_msg *cmd_rma = (void *) xfer_entry->user_data;
-	struct sm2_sar_ctx *ctx = (void *) cmd_rma->sar_hdr.context;
+	struct sm2_cmd_sar_hdr *sar_hdr = (void *) xfer_entry->user_data;
+	struct sm2_sar_ctx *ctx = (void *) sar_hdr->context;
 	bool tx_complete, rx_complete;
 	int ret;
 
 	ctx->msgs_in_flight--;
 
-	ctx->status_flags |=
-		cmd_rma->sar_hdr.proto_flags & FI_SM2_SAR_ERROR_FLAG;
+	ctx->status_flags |= sar_hdr->proto_flags & FI_SM2_SAR_ERROR_FLAG;
 	if (ctx->status_flags & FI_SM2_SAR_ERROR_FLAG) {
 		sm2_rma_handle_remote_error(ep, xfer_entry, ctx);
 		return FI_SUCCESS;
 	}
 
 	tx_complete = ctx->bytes_sent == ctx->bytes_total;
-	rx_complete =
-		FI_SM2_SAR_LAST_MESSAGE_FLAG & cmd_rma->sar_hdr.proto_flags;
+	rx_complete = FI_SM2_SAR_LAST_MESSAGE_FLAG & sar_hdr->proto_flags;
 	if (rx_complete) {
 		if (0 == (ctx->status_flags & FI_SM2_SAR_STATUS_COMPLETED)) {
 			ret = sm2_complete_tx(
@@ -506,6 +632,7 @@ static int sm2_progress_rma_write_origin(struct sm2_ep *ep,
 
 	return FI_SUCCESS;
 }
+
 static int sm2_progress_rma_write_remote(struct sm2_ep *ep,
 					 struct sm2_xfer_entry *xfer_entry)
 {
@@ -580,7 +707,8 @@ out:
 	}
 
 	/* return the xfer to the peer */
-	sm2_rma_write_back(ep, xfer_entry);
+	cmd_rma->sar_hdr.proto_flags |= FI_SM2_SAR_CTS;
+	sm2_sar_write_back(ep, xfer_entry);
 
 	return ret;
 }
@@ -593,6 +721,38 @@ static int sm2_progress_rma_write(struct sm2_ep *ep,
 		return sm2_progress_rma_write_origin(ep, xfer_entry);
 	else
 		return sm2_progress_rma_write_remote(ep, xfer_entry);
+}
+
+static int sm2_progress_sar_proto(struct sm2_ep *ep,
+				  struct sm2_xfer_entry *xfer_entry)
+{
+	int ret;
+	struct sm2_cmd_sar_hdr *sar_hdr = (void *) xfer_entry->user_data;
+	switch (xfer_entry->hdr.op) {
+	case ofi_op_msg:
+	case ofi_op_tagged:
+		if (sar_hdr->proto_flags & FI_SM2_SAR_RESUME) {
+			ret = sm2_progress_sar_msg_resume(ep, xfer_entry);
+		} else if (xfer_entry->hdr.sender_gid == ep->gid)
+			ret = sm2_progress_rma_write_origin(ep, xfer_entry);
+		else
+			ret = sm2_progress_recv_msg(ep, xfer_entry);
+		break;
+	case ofi_op_write:
+		ret = sm2_progress_rma_write(ep, xfer_entry);
+		break;
+	case ofi_op_read_rsp:
+		ret = sm2_progress_rma_read_rsp(ep, xfer_entry);
+		break;
+	case ofi_op_read_req:
+		ret = sm2_progress_rma_read_req(ep, xfer_entry);
+		break;
+	default:
+		FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+			"Unidentified SAR operation type\n");
+		ret = -FI_EINVAL;
+	}
+	return ret;
 }
 
 void sm2_progress_recv(struct sm2_ep *ep)
@@ -634,6 +794,9 @@ void sm2_progress_recv(struct sm2_ep *ep)
 			ofi_spin_unlock(&ep->tx_lock);
 			continue;
 		}
+		if (xfer_entry->hdr.proto == sm2_proto_sar) {
+			ret = sm2_progress_sar_proto(ep, xfer_entry);
+		}
 		switch (xfer_entry->hdr.op) {
 		case ofi_op_msg:
 		case ofi_op_tagged:
@@ -643,15 +806,6 @@ void sm2_progress_recv(struct sm2_ep *ep)
 		case ofi_op_atomic_fetch:
 		case ofi_op_atomic_compare:
 			ret = sm2_progress_atomic(ep, xfer_entry);
-			break;
-		case ofi_op_write:
-			ret = sm2_progress_rma_write(ep, xfer_entry);
-			break;
-		case ofi_op_read_rsp:
-			ret = sm2_progress_rma_read_rsp(ep, xfer_entry);
-			break;
-		case ofi_op_read_req:
-			ret = sm2_progress_rma_read_req(ep, xfer_entry);
 			break;
 		default:
 			FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,

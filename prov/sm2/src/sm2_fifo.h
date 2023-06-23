@@ -275,7 +275,7 @@ static inline void sm2_fifo_write_back(struct sm2_ep *ep,
 	sm2_fifo_write(ep, xfer_entry->hdr.sender_gid, xfer_entry);
 }
 
-static inline void sm2_rma_write_back(struct sm2_ep *ep,
+static inline void sm2_sar_write_back(struct sm2_ep *ep,
 				      struct sm2_xfer_entry *xfer_entry)
 {
 	struct sm2_cmd_sar_rma_msg *cmd_rma =

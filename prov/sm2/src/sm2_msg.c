@@ -110,24 +110,17 @@ ssize_t sm2_do_sar_msg(struct sm2_ep *ep, struct sm2_region *peer_smr,
 	sm2_generic_format(xfer_entry, ep->gid, op, tag, data, op_flags,
 			   context);
 
-	while (ctx->msgs_in_flight < 16 &&
-	       ctx->bytes_sent != ctx->bytes_total) {
-		ret = sm2_pop_xfer_entry(ep, &xfer_entry);
-		if (ret) {
-			if (ctx->msgs_in_flight == 0) {
-				sm2_free_rma_ctx(ctx);
-				ret = -FI_EAGAIN;
-			} else
-				ret = FI_SUCCESS;
-			return ret;
-		}
-		ret = sm2_rma_cmd_fill_sar_xfer(xfer_entry, ctx);
-		if (!ret)
-			sm2_fifo_write(ep, peer_gid, xfer_entry);
-		else {
-			sm2_rma_handle_local_error(ep, xfer_entry, ctx, ret);
-			break;
-		}
+	/* for MSG, we wait for CTS from receiver, so send only one xfer.*/
+	ret = sm2_pop_xfer_entry(ep, &xfer_entry);
+	if (ret) {
+		sm2_free_rma_ctx(ctx);
+		return -FI_EAGAIN;
+	}
+	ret = sm2_rma_cmd_fill_sar_xfer(xfer_entry, ctx);
+	if (!ret)
+		sm2_fifo_write(ep, peer_gid, xfer_entry);
+	else {
+		sm2_rma_handle_local_error(ep, xfer_entry, ctx, ret);
 	}
 
 	if (!(op_flags & FI_DELIVERY_COMPLETE) &&
@@ -211,19 +204,7 @@ static ssize_t sm2_generic_sendmsg(struct sm2_ep *ep, const struct iovec *iov,
 	ret = sm2_proto_ops[proto](ep, peer_smr, peer_gid, op, tag, data,
 				   op_flags, mr, iov, iov_count, total_len,
 				   context);
-	if (ret)
-		goto unlock_cq;
 
-	if (!(op_flags & FI_DELIVERY_COMPLETE)) {
-		ret = sm2_complete_tx(ep, context, op, op_flags);
-		if (ret) {
-			FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
-				"Unable to process tx completion\n");
-			goto unlock_cq;
-		}
-	}
-
-unlock_cq:
 	ofi_spin_unlock(&ep->tx_lock);
 	return ret;
 }

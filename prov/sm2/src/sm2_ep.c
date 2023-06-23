@@ -213,6 +213,16 @@ static ssize_t sm2_do_inject(struct sm2_ep *ep, struct sm2_region *peer_smr,
 	sm2_format_inject(xfer_entry, mr, iov, iov_count);
 
 	sm2_fifo_write(ep, peer_gid, xfer_entry);
+
+	if (!(op_flags & FI_DELIVERY_COMPLETE)) {
+		ret = sm2_complete_tx(ep, context, op, op_flags);
+		if (ret) {
+			FI_WARN(&sm2_prov, FI_LOG_EP_CTRL,
+				"Unable to process tx completion\n");
+			return ret;
+		}
+	}
+
 	return FI_SUCCESS;
 }
 
