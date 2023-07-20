@@ -423,6 +423,7 @@ struct xnet_xfer_entry {
 struct xnet_domain {
 	struct util_domain		util_domain;
 	struct xnet_progress		progress;
+	enum fi_ep_type			ep_type;
 };
 
 static inline struct xnet_progress *xnet_ep2_progress(struct xnet_ep *ep)
@@ -620,7 +621,7 @@ xnet_alloc_rx(struct xnet_ep *ep)
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 	xfer = xnet_alloc_xfer(xnet_ep2_progress(ep));
 	if (xfer) {
-		xfer->cntr = ep->util_ep.rx_cntr;
+		xfer->cntr = ep->util_ep.cntrs[CNTR_RX];
 		xfer->cq = xnet_ep_rx_cq(ep);
 	}
 

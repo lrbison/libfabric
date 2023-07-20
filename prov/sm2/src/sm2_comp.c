@@ -41,7 +41,7 @@
 int sm2_complete_tx(struct sm2_ep *ep, void *context, uint32_t op,
 		    uint64_t flags)
 {
-	ofi_ep_tx_cntr_inc_func(&ep->util_ep, op);
+	ofi_ep_peer_tx_cntr_inc(&ep->util_ep, op);
 
 	if (!(flags & FI_COMPLETION))
 		return 0;
@@ -52,7 +52,7 @@ int sm2_complete_tx(struct sm2_ep *ep, void *context, uint32_t op,
 }
 
 int sm2_write_err_comp(struct util_cq *cq, void *context, uint64_t flags,
-		       uint64_t tag, uint64_t err)
+		       uint64_t tag, uint64_t data, uint64_t err)
 {
 	struct fi_cq_err_entry err_entry;
 	memset(&err_entry, 0, sizeof err_entry);
@@ -61,6 +61,7 @@ int sm2_write_err_comp(struct util_cq *cq, void *context, uint64_t flags,
 	err_entry.tag = tag;
 	err_entry.err = err;
 	err_entry.prov_errno = -err;
+	err_entry.data = data;
 	return ofi_peer_cq_write_error(cq, &err_entry);
 }
 
@@ -70,7 +71,7 @@ int sm2_complete_rx(struct sm2_ep *ep, void *context, uint32_t op,
 {
 	struct sm2_av *sm2_av;
 
-	ofi_ep_rx_cntr_inc_func(&ep->util_ep, op);
+	ofi_ep_peer_rx_cntr_inc(&ep->util_ep, op);
 
 	if (!(flags & (FI_REMOTE_CQ_DATA | FI_COMPLETION)))
 		return 0;

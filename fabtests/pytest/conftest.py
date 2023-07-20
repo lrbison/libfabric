@@ -224,6 +224,10 @@ def server_address(cmdline_args, good_address):
     return cmdline_args.server_id
 
 @pytest.fixture(scope="module", params=["transmit_complete", "delivery_complete"])
+def completion_semantic(request):
+    return request.param
+
+@pytest.fixture(scope="module", params=["queue", "counter"])
 def completion_type(request):
     return request.param
 
