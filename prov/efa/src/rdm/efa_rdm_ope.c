@@ -270,9 +270,15 @@ void efa_rdm_ope_try_fill_desc(struct efa_rdm_ope *ope, int mr_iov_start, uint64
 {
 	int i, err;
 
+	bool avoid_mr = efa_rdm_ep_domain(ope->ep)->hmem_info[FI_HMEM_SYSTEM].avoid_mr;
 	for (i = mr_iov_start; i < ope->iov_count; ++i) {
 		if (ope->desc[i])
 			continue;
+
+		if (avoid_mr) {
+			ope->mr[i] = NULL;
+			continue;
+		}
 
 		err = fi_mr_regv(
 			&efa_rdm_ep_domain(ope->ep)->util_domain.domain_fid,

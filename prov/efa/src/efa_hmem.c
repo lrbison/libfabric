@@ -35,6 +35,7 @@ static int efa_domain_hmem_info_init_protocol_thresholds(struct efa_domain *efa_
 	/* Fall back to FI_HMEM_SYSTEM initialization logic when p2p is unavailable */
 	if (!info->p2p_supported_by_device)
 		iface = FI_HMEM_SYSTEM;
+	info->avoid_mr = 0;
 
 	switch (iface) {
 	case FI_HMEM_SYSTEM:
@@ -48,6 +49,7 @@ static int efa_domain_hmem_info_init_protocol_thresholds(struct efa_domain *efa_
 		fi_param_get_size_t(&efa_prov, "inter_max_medium_message_size", &info->max_medium_msg_size);
 		fi_param_get_size_t(&efa_prov, "inter_min_read_message_size", &info->min_read_msg_size);
 		fi_param_get_size_t(&efa_prov, "inter_min_read_write_size", &info->min_read_write_size);
+		fi_param_get_bool(&efa_prov, "avoid_mr", &info->avoid_mr);
 		break;
 	case FI_HMEM_CUDA:
 		info->runt_size = EFA_DEFAULT_RUNT_SIZE;
