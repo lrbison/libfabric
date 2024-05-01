@@ -195,6 +195,8 @@ void efa_env_define()
 			"Set the number of EFA completion entries to read for one loop for one iteration of the progress engine. (Default: 50)");
 	fi_param_define(&efa_prov, "shm_cq_read_size", FI_PARAM_SIZE_T,
 			"Set the number of SHM completion entries to read for one loop for one iteration of the progress engine. (Default: 50)");
+	fi_param_define(&efa_prov, "avoid_mr", FI_PARAM_BOOL,
+			"Whenever possible, do not register memory to EFA device.  Instead prefer bounce-buffers.  Default: no");
 	fi_param_define(&efa_prov, "inter_max_medium_message_size", FI_PARAM_INT,
 			"The maximum message size for inter EFA medium message protocol (Default 65536).");
 	fi_param_define(&efa_prov, "inter_min_read_message_size", FI_PARAM_INT,
